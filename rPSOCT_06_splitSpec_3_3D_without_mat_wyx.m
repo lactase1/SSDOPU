@@ -10,9 +10,16 @@
 %%% 5. optinal to perform split-spectrum DOPU
 %%% 6. DIR: 03_2024.07.03.psOCTry2
 
+% 添加function文件夹到搜索路径
+script_dir = fileparts(mfilename('fullpath'));
+function_path = fullfile(script_dir, 'function');
+if exist(function_path, 'dir')
+    addpath(function_path);
+end
+
 % 设置数据路径
-data_path = 'D:\1-Liu Jian\yongxin.wang\data_without_mat\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\without_wovWinf\';
+data_path = 'D:\1-Liu Jian\yongxin.wang\PSOCT\data_without_mat\';
+output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\without_wovWinf\';
 
 % 检查输入路径
 if ~exist(data_path, 'dir')
@@ -25,10 +32,11 @@ if ~exist(output_base, 'dir')
 end
 
 % 获取所有oct文件
+disp('正在处理数据...');
 oct_files = dir(fullfile(data_path, '*.oct'));
 
-if isempty(oct_files)wsl
-
+if isempty(oct_files)
+else
 % 显示找到的文件
 fprintf('找到 %d 个 OCT 文件:\n', length(oct_files));
 for i = 1:length(oct_files)
@@ -53,6 +61,8 @@ for i = 1:length(oct_files)
 end
 
 fprintf('\n所有文件处理完成!\n');
+
+end
 
 
 function rPSOCT_process_single_file(varargin)
@@ -104,7 +114,7 @@ function rPSOCT_process_single_file(varargin)
     do_avg = 1;
     do_eig =0;
     setZrg = 0; %% if speed the cal process setZrg = 200 to speed
-    wovWinF = 0; % if do variabe weight filter use DOPU
+    wovWinF = 1; % if do variabe weight filter use DOPU
 
     %% 设置是否采用ssdopu 
     do_ssdopu = 0; % if do splitted spectrum
