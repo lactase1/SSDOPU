@@ -16,8 +16,8 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path = 'D:\1-Liu Jian\yongxin.wang\PSOCT\data_without_mat\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\without_wovWinf_gpu\';
+data_path = 'D:\1-Liu Jian\yongxin.wang\PSOCT\\tmp\';
+output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\\wovwinF0-ssdopu1';
 
 % 检查GPU可用性
 try
@@ -145,17 +145,17 @@ function rPSOCT_process_single_file_gpu(varargin)
     do_avg = 1;
     do_eig =0;
     setZrg = 0; %% if speed the cal process setZrg = 200 to speed
-    wovWinF = 1; % if do variabe weight filter use DOPU
+    wovWinF = 0; % if do variabe weight filter use DOPU
 
     %% 设置是否采用ssdopu 
-    do_ssdopu = 0; % if do splitted spectrum
+    do_ssdopu = 1; % if do splitted spectrum
     %% (3)偏振参数设置 drLA and PhR
     Avnum = 7;   %number of layers made use in first calculation to compute the normal vector in Poincare sphere
     kRL_cfg1 = 2;kRU_cfg1 = 7;% for LA calculation
     kRL_cfg2 = 3;kRU_cfg2 = 21;% for phase retardation calculation
     Avnum = 3; % for DDG test
-    h1 = fspecial('gaussian',[21 21],9);%预处理 corr3 
-    h2 = fspecial('gaussian',[17 17],9);
+    h1 = fspecial('gaussian',[5 5],9);%预处理 corr3 
+    h2 = fspecial('gaussian',[7 7],9);
     
     % 如果GPU可用，将滤波器转移到GPU
     if gpu_available
