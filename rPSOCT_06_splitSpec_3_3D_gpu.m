@@ -233,13 +233,12 @@ function rPSOCT_process_single_file_gpu(varargin)
     imshowrgZ=1:nZcrop; % 图像显示的Z范围
     jusamp=zeros(nZcrop,nX,4); % 初始化采样数据数组
     
-    %% 设置窗口函数
-    winG = tukeywin(Blength,0.25); % 创建Tukey窗口函数（减少频谱泄漏）
-    
     %% 设置分割频谱DOPU参数
     nWin = 9; % 频谱分割的窗口数量
     winL = 2*Blength/(nWin+1); % 每个子窗口的长度
-    winG=tukeywin(winL,0.25); % 为子窗口创建Tukey窗口函数
+    
+    %% 设置窗口函数
+    winG = tukeywin(winL,0.25); % 为子窗口创建Tukey窗口函数
     winG_whole = tukeywin(Blength,0.25); % 为全频谱创建窗口函数
     windex=1:winL/2:Blength; % 创建子窗口的起始索引（窗口间隔为winL/2）
     
@@ -293,19 +292,24 @@ for nr = [nR]
     end
     if setZrg, czrg = czrg(1:setZrg);end
     nZcrop = numel(czrg);nZ = nZcrop;
-    % (c) creat array to store results
-    LA_c_cfg1_avg = zeros(nZcrop-Avnum,nX,3,nY);PhR_c_cfg1_avg = zeros(nZcrop-Avnum,nX,nY);
+    % 声明为复合输出变量，便于parfor正确分类
+    % https://www.mathworks.com/help/parallel-computing/nested-arrays-and-parfor.html
+    LA_c_cfg1_avg = zeros(nZcrop-Avnum,nX,3,nY);
+    PhR_c_cfg1_avg = zeros(nZcrop-Avnum,nX,nY);
     cumLA_cfg1_avg = zeros(nZcrop-Avnum,nX,3,nY);
-    LA_c_cfg1_eig = zeros(nZcrop-Avnum,nX,3,nY);PhR_c_cfg1_eig = zeros(nZcrop-Avnum,nX,nY);
+    LA_c_cfg1_eig = zeros(nZcrop-Avnum,nX,3,nY);
+    PhR_c_cfg1_eig = zeros(nZcrop-Avnum,nX,nY);
     cumLA_cfg1_eig = zeros(nZcrop-Avnum,nX,3,nY);
 
-    LA_Ms_cfg1_rmBG = LA_c_cfg1_avg;
-    PhR_Ms_cfg1_rmBG = cumLA_cfg1_avg;
-    cumLA_Ms_cfg1_rmBG = LA_c_cfg1_eig;
+    LA_Ms_cfg1_rmBG = zeros(nZcrop-Avnum,nX,3,nY);
+    PhR_Ms_cfg1_rmBG = zeros(nZcrop-Avnum,nX,nY);
+    cumLA_Ms_cfg1_rmBG = zeros(nZcrop-Avnum,nX,3,nY);
 
-    LA_c_cfg2_avg = zeros(nZcrop-Avnum,nX,3,nY);PhR_c_cfg2_avg = zeros(nZcrop-Avnum,nX,nY);
+    LA_c_cfg2_avg = zeros(nZcrop-Avnum,nX,3,nY);
+    PhR_c_cfg2_avg = zeros(nZcrop-Avnum,nX,nY);
     cumLA_cfg2_avg = zeros(nZcrop-Avnum,nX,3,nY);
-    LA_c_cfg2_eig = zeros(nZcrop-Avnum,nX,3,nY);PhR_c_cfg2_eig = zeros(nZcrop-Avnum,nX,nY);
+    LA_c_cfg2_eig = zeros(nZcrop-Avnum,nX,3,nY);
+    PhR_c_cfg2_eig = zeros(nZcrop-Avnum,nX,nY);
     cumLA_cfg2_eig = zeros(nZcrop-Avnum,nX,3,nY);
     Smap_avg = zeros(numel(czrg),nX,3,nY);Smap_rep1 = zeros(numel(czrg),nX,3,nY);
     Strus = zeros(numel(czrg),nX,nY);Stru_OAC = Strus;
@@ -320,7 +324,15 @@ for nr = [nR]
         end
     end
 
-    parfor iY=1:iy:nY-1 % Bscan number
+    % 预处理GPU版本的窗口函数，避免在parfor中处理
+    gpu_winG = winG;
+    gpu_winG_whole = winG_whole;
+    if gpu_available
+        gpu_winG = gpuArray(winG);
+        gpu_winG_whole = gpuArray(winG_whole);
+    end
+
+    parfor iY=1:nY-1 % Bscan number - 注意这里去掉了增量iy
     % for iY=1:50:nY-1 % Bscan number
     % for iY = 478 % ===============================>>>>>>>>>>> run single B scan
             
@@ -364,15 +376,16 @@ for nr = [nR]
                     S1 = gpuArray(S1);
                     S2 = gpuArray(S2);
                     S3 = gpuArray(S3);
-                    winG = gpuArray(winG);
+                    % 不在parfor循环中修改winG，使用当前已有的版本
+                    % GPU版本的winG在parfor之前已经准备好
                 end
                 
                 for iR = 1:nr
                     for iL=1:nWin
                         % extract data fragments from two different channel and
                         % apply a giassian filter before performing FFT
-                        iBd1=Bd1(windex(iL):windex(iL)+winL-1,:,iR).*winG;
-                        iBd2=Bd2(windex(iL):windex(iL)+winL-1,:,iR).*winG;
+                        iBd1=Bd1(windex(iL):windex(iL)+winL-1,:,iR).*gpu_winG;
+                        iBd2=Bd2(windex(iL):windex(iL)+winL-1,:,iR).*gpu_winG;
                         Bimg1(:,:,iR,iL)=fft(iBd1,SPL,1);
                         Bimg2(:,:,iR,iL)=fft(iBd2,SPL,1);
                     end
@@ -395,7 +408,7 @@ for nr = [nR]
                 dopu_splitSpectrum(:,:,iY) = gather(mean(dopu_ss,3));
             end
             %% whole spectrum nZ*nX*nR==> fft(complex)
-            Bimg1_wholeStr=fft(Bd1.*winG_whole,SPL,1);Bimg2_wholeStr=fft(Bd2.*winG_whole,SPL,1);
+            Bimg1_wholeStr=fft(Bd1.*gpu_winG_whole,SPL,1);Bimg2_wholeStr=fft(Bd2.*gpu_winG_whole,SPL,1);
             IMG1_wholeStr = Bimg1_wholeStr(czrg,:,:);IMG2_wholeStr = Bimg2_wholeStr(czrg,:,:);
 
             %% Struc Stokes, and OAC
