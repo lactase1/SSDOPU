@@ -4,25 +4,7 @@
 %%%   and phase
 %%% 2. speed the cal process, setZrg = 100; setZrg = 0 for process all
 %%% ______________________________20240913________________________________________                if do_avg %% avg -- cfg1
-                    if gpu_available
-                        IMG_ch1 = gather(squeeze(mean(IMG1_wholeStr,3)));
-                        IMG_ch2 = gather(squeeze(mean(IMG2_wholeStr,3)));
-                        % 处理dopu_ss的不同情况
-                        if ~do_ssdopu
-                            dopu_splitSpec_M_cpu = 1;
-                        else
-                            dopu_splitSpec_M_cpu = gather(squeeze(mean(dopu_ss,3)));
-                        end
-                    else
-                        IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));
-                        IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
-                        % 处理dopu_ss的不同情况
-                        if ~do_ssdopu
-                            dopu_splitSpec_M_cpu = 1;
-                        else
-                            dopu_splitSpec_M_cpu = squeeze(mean(dopu_ss,3));
-                        end
-                    end%% 3. optional to toggle vWinF
+%%% 3. optional to toggle vWinF
 %%% 4.cfg2 was optinal to [do SVD with remove bias] and DDG 
 %%% ______________________________20240721_______________________________________________
 %%% 5. optinal to perform split-spectrum DOPU
@@ -114,11 +96,13 @@ function rPSOCT_process_single_file(varargin)
     try
         gpu_info = gpuDevice();
         gpu_available = true;
-        fprintf('检测到GPU: %s (内存: %.2f GB)\n', gpu_info.Name, gpu_info.AvailableMemory/1024^3);
-        fprintf('GPU计算已启用\n');
-    catch
+        fprintf('✅ 检测到GPU: %s (内存: %.2f GB)\n', gpu_info.Name, gpu_info.AvailableMemory/1024^3);
+        fprintf('   计算能力: %s, 多处理器: %d\n', gpu_info.ComputeCapability, gpu_info.MultiprocessorCount);
+        fprintf('🚀 GPU计算已启用\n');
+    catch ME
         gpu_available = false;
-        fprintf('未检测到支持的GPU或CUDA，将使用CPU计算\n');
+        fprintf('❌ 未检测到支持的GPU或CUDA: %s\n', ME.message);
+        fprintf('   将使用CPU计算\n');
     end
     
     % 启动并行池
@@ -269,6 +253,13 @@ for nr = [nR]
     Strus = zeros(numel(czrg),nX,nY);Stru_OAC = Strus;
     dopu_splitSpectrum = zeros(numel(czrg),nX,nY);
     pb = ProgressBar(nY);
+    
+    % 显示处理信息
+    if gpu_available
+        fprintf('🚀 开始GPU加速处理 %d 个B-scan...\n', nY-1);
+    else
+        fprintf('💻 开始CPU处理 %d 个B-scan...\n', nY-1);
+    end
 
     parfor iY=1:nY-1 % Bscan number
     % for iY=1:50:nY-1 % Bscan number
@@ -298,6 +289,10 @@ for nr = [nR]
                 Bd2_gpu = gpuArray(Bd2);
                 winG_gpu = gpuArray(winG);
                 winG_whole_gpu = gpuArray(winG_whole);
+                % 在第一次迭代时显示GPU状态
+                if iY == 1
+                    fprintf('📊 GPU数据传输完成，开始GPU计算...\n');
+                end
             else
                 Bd1_gpu = Bd1;
                 Bd2_gpu = Bd2;
@@ -383,11 +378,21 @@ for nr = [nR]
                     if gpu_available
                         IMG_ch1 = gather(squeeze(mean(IMG1_wholeStr,3)));
                         IMG_ch2 = gather(squeeze(mean(IMG2_wholeStr,3)));
-                        dopu_splitSpec_M_cpu = gather(squeeze(mean(dopu_ss,3)));
+                        % 处理dopu_ss的不同情况
+                        if ~do_ssdopu
+                            dopu_splitSpec_M_cpu = 1;
+                        else
+                            dopu_splitSpec_M_cpu = gather(squeeze(mean(dopu_ss,3)));
+                        end
                     else
                         IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));
                         IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
-                        dopu_splitSpec_M_cpu = squeeze(mean(dopu_ss,3));
+                        % 处理dopu_ss的不同情况
+                        if ~do_ssdopu
+                            dopu_splitSpec_M_cpu = 1;
+                        else
+                            dopu_splitSpec_M_cpu = squeeze(mean(dopu_ss,3));
+                        end
                     end
                     [LA_c_cfg1_avg(:,:,:,iY),PhR_c_cfg1_avg(:,:,iY),cumLA_cfg1_avg(:,:,:,iY),...
                         LA_Ms_cfg1_rmBG(:,:,:,iY),PhR_Ms_cfg1_rmBG(:,:,iY),cumLA_Ms_cfg1_rmBG(:,:,:,iY)] = ...
@@ -453,8 +458,10 @@ for nr = [nR]
     
     % 释放GPU内存
     if gpu_available
+        gpu_mem_used = (gpuDevice().TotalMemory - gpuDevice().AvailableMemory) / 1024^3;
         reset(gpuDevice);
-        fprintf('GPU内存已释放\n');
+        fprintf('🧹 GPU内存已释放 (之前使用: %.2f GB)\n', gpu_mem_used);
+        fprintf('✅ GPU处理完成!\n');
     end
     %% save results: strus(flow),stokes,oac
     if saveDicom
