@@ -3,8 +3,26 @@
 %%% 1. use doup to apply a variable gaussian fitler to Q U V before cal LA
 %%%   and phase
 %%% 2. speed the cal process, setZrg = 100; setZrg = 0 for process all
-%%% ______________________________20240913_______________________________________________
-%%% 3. optional to toggle vWinF
+%%% ______________________________20240913________________________________________                if do_avg %% avg -- cfg1
+                    if gpu_available
+                        IMG_ch1 = gather(squeeze(mean(IMG1_wholeStr,3)));
+                        IMG_ch2 = gather(squeeze(mean(IMG2_wholeStr,3)));
+                        % 处理dopu_ss的不同情况
+                        if ~do_ssdopu
+                            dopu_splitSpec_M_cpu = 1;
+                        else
+                            dopu_splitSpec_M_cpu = gather(squeeze(mean(dopu_ss,3)));
+                        end
+                    else
+                        IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));
+                        IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
+                        % 处理dopu_ss的不同情况
+                        if ~do_ssdopu
+                            dopu_splitSpec_M_cpu = 1;
+                        else
+                            dopu_splitSpec_M_cpu = squeeze(mean(dopu_ss,3));
+                        end
+                    end%% 3. optional to toggle vWinF
 %%% 4.cfg2 was optinal to [do SVD with remove bias] and DDG 
 %%% ______________________________20240721_______________________________________________
 %%% 5. optinal to perform split-spectrum DOPU
@@ -91,6 +109,17 @@ function rPSOCT_process_single_file(varargin)
     %% (2) 初始化参数
     %clear all;close all;clc;
     delete(gcp('nocreate'));
+    
+    % 检测GPU可用性
+    try
+        gpu_info = gpuDevice();
+        gpu_available = true;
+        fprintf('检测到GPU: %s (内存: %.2f GB)\n', gpu_info.Name, gpu_info.AvailableMemory/1024^3);
+        fprintf('GPU计算已启用\n');
+    catch
+        gpu_available = false;
+        fprintf('未检测到支持的GPU或CUDA，将使用CPU计算\n');
+    end
     
     % 启动并行池
     if isempty(gcp('nocreate'))
@@ -241,7 +270,7 @@ for nr = [nR]
     dopu_splitSpectrum = zeros(numel(czrg),nX,nY);
     pb = ProgressBar(nY);
 
-    parfor iY=1:iy:nY-1 % Bscan number
+    parfor iY=1:nY-1 % Bscan number
     % for iY=1:50:nY-1 % Bscan number
     % for iY = 478 % ===============================>>>>>>>>>>> run single B scan
             
@@ -262,19 +291,39 @@ for nr = [nR]
                 Bd1=Bs1;
                 Bd2=Bs2;
             end
+            
+            % 如果GPU可用，将数据转移到GPU进行FFT计算
+            if gpu_available
+                Bd1_gpu = gpuArray(Bd1);
+                Bd2_gpu = gpuArray(Bd2);
+                winG_gpu = gpuArray(winG);
+                winG_whole_gpu = gpuArray(winG_whole);
+            else
+                Bd1_gpu = Bd1;
+                Bd2_gpu = Bd2;
+                winG_gpu = winG;
+                winG_whole_gpu = winG_whole;
+            end
             %% split spectrum
             if ~do_ssdopu % if not do adaptive gaussian filter dopu_ss =1 
                 dopu_ss = 1;
+                % 设置默认值，但在后续处理中需要正确设置
             else
                 % creat array to store split-spectrum complex (FFT): Z*X*nR*nWin 
-                Bimg1 = zeros(SPL,nX,nr,nWin);Bimg2 = Bimg1;
-                S0 = zeros(nZcrop,nX,nr,nWin); S1 = S0;S2=S0;S3=S0;
+                if gpu_available
+                    Bimg1 = zeros(SPL,nX,nr,nWin,'gpuArray');Bimg2 = Bimg1;
+                    S0 = zeros(nZcrop,nX,nr,nWin,'gpuArray'); S1 = S0;S2=S0;S3=S0;
+                else
+                    Bimg1 = zeros(SPL,nX,nr,nWin);Bimg2 = Bimg1;
+                    S0 = zeros(nZcrop,nX,nr,nWin); S1 = S0;S2=S0;S3=S0;
+                end
+                
                 for iR = 1:nr
                     for iL=1:nWin
                         % extract data fragments from two different channel and
                         % apply a giassian filter before performing FFT
-                        iBd1=Bd1(windex(iL):windex(iL)+winL-1,:,iR).*winG;
-                        iBd2=Bd2(windex(iL):windex(iL)+winL-1,:,iR).*winG;
+                        iBd1=Bd1_gpu(windex(iL):windex(iL)+winL-1,:,iR).*winG_gpu;
+                        iBd2=Bd2_gpu(windex(iL):windex(iL)+winL-1,:,iR).*winG_gpu;
                         Bimg1(:,:,iR,iL)=fft(iBd1,SPL,1);
                         Bimg2(:,:,iR,iL)=fft(iBd2,SPL,1);
                     end
@@ -283,54 +332,99 @@ for nr = [nR]
                 % calculate the QUV from the two-channel complex
                 for iR = 1:nr
                     for iL = 1: nWin
-                        [S0(:,:,iR,iL),S1(:,:,iR,iL),S2(:,:,iR,iL),S3(:,:,iR,iL)] = ...
-                            cumulativeQUV(IMGs_ch1(:,:,iR,iL),IMGs_ch2(:,:,iR,iL));
+                        if gpu_available
+                            [S0(:,:,iR,iL),S1(:,:,iR,iL),S2(:,:,iR,iL),S3(:,:,iR,iL)] = ...
+                                cumulativeQUV_gpu(IMGs_ch1(:,:,iR,iL),IMGs_ch2(:,:,iR,iL));
+                        else
+                            [S0(:,:,iR,iL),S1(:,:,iR,iL),S2(:,:,iR,iL),S3(:,:,iR,iL)] = ...
+                                cumulativeQUV(IMGs_ch1(:,:,iR,iL),IMGs_ch2(:,:,iR,iL));
+                        end
                     end
                 end
                 % average QUV accross split-spectrum and calculate dopu 
                 dopu_ss = sqrt(mean(S1./S0,4).^2+mean(S2./S0,4).^2+mean(S3./S0,4).^2);%% ===>nZcrop,nX,nr
-                dopu_splitSpectrum(:,:,iY) = mean(dopu_ss,3);
+                if gpu_available
+                    dopu_splitSpectrum(:,:,iY) = gather(mean(dopu_ss,3));
+                else
+                    dopu_splitSpectrum(:,:,iY) = mean(dopu_ss,3);
+                end
             end
             %% whole spectrum nZ*nX*nR==> fft(complex)
-            Bimg1_wholeStr=fft(Bd1.*winG_whole,SPL,1);Bimg2_wholeStr=fft(Bd2.*winG_whole,SPL,1);
+            Bimg1_wholeStr=fft(Bd1_gpu.*winG_whole_gpu,SPL,1);Bimg2_wholeStr=fft(Bd2_gpu.*winG_whole_gpu,SPL,1);
             IMG1_wholeStr = Bimg1_wholeStr(czrg,:,:);IMG2_wholeStr = Bimg2_wholeStr(czrg,:,:);
 
             %% Struc Stokes, and OAC
-            [wS0,wS1,wS2,wS3] = cumulativeQUV(IMG1_wholeStr,IMG2_wholeStr);
+            if gpu_available
+                [wS0,wS1,wS2,wS3] = cumulativeQUV_gpu(IMG1_wholeStr,IMG2_wholeStr);
+            else
+                [wS0,wS1,wS2,wS3] = cumulativeQUV(IMG1_wholeStr,IMG2_wholeStr);
+            end
             wQ = wS1./wS0;wU = wS2./wS0; wV = wS3./wS0;
             strLin = mean(wS0,3);
-            Strus(:,:,iY) = 20*log10(strLin);
-            Smap_avg(:,:,:,iY) = cat(3,mean(wQ,3),mean(wU,3),mean(wV,3));
-            Smap_rep1(:,:,:,iY) = cat(3,wQ(:,:,1),wU(:,:,1),wV(:,:,1));
-            if ~hasSeg, strOAC = calOAC(strLin); topLines(:,iY)=surf_seg(strOAC,0.25)+2; end
+            
+            % 将GPU计算结果转回CPU以保存
+            if gpu_available
+                Strus(:,:,iY) = gather(20*log10(strLin));
+                Smap_avg(:,:,:,iY) = gather(cat(3,mean(wQ,3),mean(wU,3),mean(wV,3)));
+                Smap_rep1(:,:,:,iY) = gather(cat(3,wQ(:,:,1),wU(:,:,1),wV(:,:,1)));
+                strLin_cpu = gather(strLin); % 用于后续OAC计算
+            else
+                Strus(:,:,iY) = 20*log10(strLin);
+                Smap_avg(:,:,:,iY) = cat(3,mean(wQ,3),mean(wU,3),mean(wV,3));
+                Smap_rep1(:,:,:,iY) = cat(3,wQ(:,:,1),wU(:,:,1),wV(:,:,1));
+                strLin_cpu = strLin;
+            end
+            if ~hasSeg, strOAC = calOAC(strLin_cpu); topLines(:,iY)=surf_seg(strOAC,0.25)+2; end
             
             %% drLA and drPhR
-            dopu_splitSpec_M = squeeze(mean(dopu_ss,3)); %% dopu across the different repeat(nR)
+            % dopu across the different repeat(nR) - now handled per GPU/CPU branch above
             if do_cfg1 
                 if do_avg %% avg -- cfg1
-                IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
-                [LA_c_cfg1_avg(:,:,:,iY),PhR_c_cfg1_avg(:,:,iY),cumLA_cfg1_avg(:,:,:,iY),...
-                    LA_Ms_cfg1_rmBG(:,:,:,iY),PhR_Ms_cfg1_rmBG(:,:,iY),cumLA_Ms_cfg1_rmBG(:,:,:,iY)] = ...
-                    calLAPhRALL(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M,kRL_cfg1,kRU_cfg1,h1,h2,Avnum,wovWinF);
+                    if gpu_available
+                        IMG_ch1 = gather(squeeze(mean(IMG1_wholeStr,3)));
+                        IMG_ch2 = gather(squeeze(mean(IMG2_wholeStr,3)));
+                        dopu_splitSpec_M_cpu = gather(squeeze(mean(dopu_ss,3)));
+                    else
+                        IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));
+                        IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
+                        dopu_splitSpec_M_cpu = squeeze(mean(dopu_ss,3));
+                    end
+                    [LA_c_cfg1_avg(:,:,:,iY),PhR_c_cfg1_avg(:,:,iY),cumLA_cfg1_avg(:,:,:,iY),...
+                        LA_Ms_cfg1_rmBG(:,:,:,iY),PhR_Ms_cfg1_rmBG(:,:,iY),cumLA_Ms_cfg1_rmBG(:,:,:,iY)] = ...
+                        calLAPhRALL(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M_cpu,kRL_cfg1,kRU_cfg1,h1,h2,Avnum,wovWinF);
                 end
                 if do_eig %% eig -- cfg1
-                [IMG_ch,~] = OCTA_F_ED_Clutter_EigFeed_comp(cat(1,IMG1_wholeStr,IMG2_wholeStr), 1); % 提取静态分量
-                IMG_ch1 = IMG_ch(1:nZ,:);IMG_ch2 = IMG_ch(nZ+1:end,:);
-                [LA_c_cfg1_eig(:,:,:,iY),PhR_c_cfg1_eig(:,:,iY),cumLA_cfg1_eig(:,:,:,iY)] = ...
-                calLAPhRALL(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M,kRL_cfg1,kRU_cfg1,h1,h2,Avnum,wovWinF);
+                    if gpu_available
+                        [IMG_ch,~] = OCTA_F_ED_Clutter_EigFeed_comp(cat(1,gather(IMG1_wholeStr),gather(IMG2_wholeStr)), 1); % 提取静态分量
+                    else
+                        [IMG_ch,~] = OCTA_F_ED_Clutter_EigFeed_comp(cat(1,IMG1_wholeStr,IMG2_wholeStr), 1); % 提取静态分量
+                    end
+                    IMG_ch1 = IMG_ch(1:nZ,:);IMG_ch2 = IMG_ch(nZ+1:end,:);
+                    [LA_c_cfg1_eig(:,:,:,iY),PhR_c_cfg1_eig(:,:,iY),cumLA_cfg1_eig(:,:,:,iY)] = ...
+                    calLAPhRALL(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M_cpu,kRL_cfg1,kRU_cfg1,h1,h2,Avnum,wovWinF);
                 end
             end
             if do_cfg2 
                 if do_avg %% avg -- cfg2
-                IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
-                [LA_c_cfg2_avg(:,:,:,iY),PhR_c_cfg2_avg(:,:,iY),cumLA_cfg2_avg(:,:,:,iY)] = ...
-                    calLAPhRcfg2(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M,kRL_cfg2,kRU_cfg2,h1,h2,Avnum,wovWinF);
+                    if gpu_available
+                        IMG_ch1 = gather(squeeze(mean(IMG1_wholeStr,3)));
+                        IMG_ch2 = gather(squeeze(mean(IMG2_wholeStr,3)));
+                    else
+                        IMG_ch1 = squeeze(mean(IMG1_wholeStr,3));
+                        IMG_ch2 = squeeze(mean(IMG2_wholeStr,3));
+                    end
+                    [LA_c_cfg2_avg(:,:,:,iY),PhR_c_cfg2_avg(:,:,iY),cumLA_cfg2_avg(:,:,:,iY)] = ...
+                        calLAPhRcfg2(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M_cpu,kRL_cfg2,kRU_cfg2,h1,h2,Avnum,wovWinF);
                 end
                 if do_eig %% eig -- cfg2
-                [IMG_ch,~] = OCTA_F_ED_Clutter_EigFeed_comp(cat(1,IMG1_wholeStr,IMG2_wholeStr), 1); % 提取静态分量
-                IMG_ch1 = IMG_ch(1:nZ,:);IMG_ch2 = IMG_ch(nZ+1:end,:);
-                [LA_c_cfg2_eig(:,:,:,iY),PhR_c_cfg2_eig(:,:,iY),cumLA_cfg2_eig(:,:,:,iY),] = ...
-                calLAPhRcfg2(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M,kRL_cfg2,kRU_cfg2,h1,h2,Avnum,wovWinF);
+                    if gpu_available
+                        [IMG_ch,~] = OCTA_F_ED_Clutter_EigFeed_comp(cat(1,gather(IMG1_wholeStr),gather(IMG2_wholeStr)), 1); % 提取静态分量
+                    else
+                        [IMG_ch,~] = OCTA_F_ED_Clutter_EigFeed_comp(cat(1,IMG1_wholeStr,IMG2_wholeStr), 1); % 提取静态分量
+                    end
+                    IMG_ch1 = IMG_ch(1:nZ,:);IMG_ch2 = IMG_ch(nZ+1:end,:);
+                    [LA_c_cfg2_eig(:,:,:,iY),PhR_c_cfg2_eig(:,:,iY),cumLA_cfg2_eig(:,:,:,iY)] = ...
+                    calLAPhRcfg2(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M_cpu,kRL_cfg2,kRU_cfg2,h1,h2,Avnum,wovWinF);
                 end
             end 
             %% check results from a frame
@@ -356,6 +450,12 @@ for nr = [nR]
     end
     pb.stop;
     fclose all;
+    
+    % 释放GPU内存
+    if gpu_available
+        reset(gpuDevice);
+        fprintf('GPU内存已释放\n');
+    end
     %% save results: strus(flow),stokes,oac
     if saveDicom
         % 修复索引越界问题
