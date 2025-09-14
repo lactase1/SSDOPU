@@ -136,61 +136,52 @@ function rPSOCT_process_single_file(varargin)
     fprintf('文件路径: %s\n', filename);
     fprintf('==================================================\n');
     
-    %% 设置OCT处理参数和读取文件头
-    Thr=170; % 去除弱OCT信号的阈值
-    
-    %% 从*.oct文件读取数据采集参数
-    fid=fopen(filename);                % 打开OCT文件
-    bob=fread(fid,1,'uint32');          % 读取文件头部偏移量
-    SPL=fread(fid,1,'double');          % 每条A-scan的采样点数
-    nX=fread(fid,1,'uint32');           % A-scan数量（每个B-scan的水平方向像素数）
-    nY=fread(fid,1,'uint32');           % B-scan数量（体积扫描的垂直方向切片数）
-    Boffset=fread(fid,1,'uint32');      % B-scan的偏移量
-    Blength=fread(fid,1,'uint32')+1;    % B-scan的长度（增加1是为了计算方便）
-    Xcenter=fread(fid,1,'double');      % X扫描中心位置
-    Xspan=fread(fid,1,'double');        % X扫描范围
-    Ycenter=fread(fid,1,'double');      % Y扫描中心位置
-    Yspan=fread(fid,1,'double');        % Y扫描范围
-    frame_per_pos=fread(fid,1,'uint32'); % 每个位置的重复扫描次数
-    n_dataset=fread(fid,1,'uint32');    % 体积扫描的重复次数
-    ProtMode=fread(fid,1,'uint32');     % 协议模式
-    fseek(fid,4,'cof');                 % 跳过4个字节（适用于v10版本）
-    
-    %% 读取背景信息和校准数据
-    sizeBck=fread(fid,1,'uint32');      % 第一个通道背景信号的大小
-    Bck1=fread(fid,sizeBck,'int16');    % 第一个通道的背景信号
-    sizeKES=fread(fid,2,'uint32');      % k空间均衡扫描信息大小
-    KES1=(fread(fid,sizeKES(2),'double'))'*sizeKES(2); % 第一个通道的k空间均衡数据
-    sizeBck=fread(fid,1,'uint32');      % 第二个通道背景信号的大小
-    Bck2=fread(fid,sizeBck,'int16');    % 第二个通道的背景信号
-    sizeKES=fread(fid,2,'uint32');      % 新的4096校准的k空间均衡扫描信息大小
-    KES2=(fread(fid,sizeKES(2),'double'))'*sizeKES(2); % 第二个通道的k空间均衡数据
-    disp_coef=fread(fid,1,'double');    % 色散系数，用于色散校正
-    
-    %% 计算和初始化处理参数
-    nR=frame_per_pos;                   % 简化变量名，表示每个位置的重复次数
-    IMGheight=floor(Blength/2);         % 计算图像高度（一般为FFT长度的一半）
-    kmat=linspace(-0.5,0.5,Blength)'.^2; % 创建k空间网格的平方（用于色散校正）
-    phV=exp(1i.*(kmat.*disp_coef)); % 计算色散校正的相位向量
-    nY=floor(nY/nR);                % 调整B-scan数量（考虑重复扫描）
-    K=1:Blength;                    % 创建k空间索引
-    use_autoRg=1;                   % 使用自动范围设置
-    RgFlow=[60 110]; % 流量显示范围
-    jsurf=zeros(4); % 初始化表面变量
-    IMcropRg=1:(SPL/2); % 设置图像裁剪范围（通常只使用FFT的前一半）
-    nZcrop=numel(IMcropRg); % 裁剪后的Z维度大小
-    imshowrgZ=1:nZcrop; % 图像显示的Z范围
-    jusamp=zeros(nZcrop,nX,4); % 初始化采样数据数组
-    
-    %% 设置窗口函数
-    winG = tukeywin(Blength,0.25); % 创建Tukey窗口函数（减少频谱泄漏）
-    
-    %% 设置分割频谱DOPU参数
-    nWin = 9; % 频谱分割的窗口数量
-    winL = 2*Blength/(nWin+1); % 每个子窗口的长度
-    winG=tukeywin(winL,0.25); % 为子窗口创建Tukey窗口函数
-    winG_whole = tukeywin(Blength,0.25); % 为全频谱创建窗口函数
-    windex=1:winL/2:Blength; % 创建子窗口的起始索引（窗口间隔为winL/2）
+    Thr=170; % Threshold to remove low OCT signal
+    % This reads the parameter used for the data acquisition from *.oct* file
+    fid=fopen(filename);
+    bob=fread(fid,1,'uint32');
+    SPL=fread(fid,1,'double');
+    nX=fread(fid,1,'uint32'); %% number of Alines
+    nY=fread(fid,1,'uint32'); %% number of B-scans
+    Boffset=fread(fid,1,'uint32');
+    Blength=fread(fid,1,'uint32')+1;
+    Xcenter=fread(fid,1,'double');
+    Xspan=fread(fid,1,'double'); 
+    Ycenter=fread(fid,1,'double');
+    Yspan=fread(fid,1,'double');
+    frame_per_pos=fread(fid,1,'uint32'); %% repetition of B-scans
+    n_dataset=fread(fid,1,'uint32'); %% repetion of volume scan
+    ProtMode=fread(fid,1,'uint32');
+    fseek(fid,4,'cof');%v10
+    sizeBck=fread(fid,1,'uint32');
+    Bck1=fread(fid,sizeBck,'int16');
+    sizeKES=fread(fid,2,'uint32');
+    KES1=(fread(fid,sizeKES(2),'double'))'*sizeKES(2);
+    sizeBck=fread(fid,1,'uint32');
+    Bck2=fread(fid,sizeBck,'int16');
+    sizeKES=fread(fid,2,'uint32'); %new 4096 cal
+    KES2=(fread(fid,sizeKES(2),'double'))'*sizeKES(2);
+    disp_coef=fread(fid,1,'double'); %%dispersion coefficient
+    nR=frame_per_pos;
+    IMGheight=floor(Blength/2);
+    kmat=linspace(-0.5,0.5,Blength)'.^2;
+    phV=exp(1i.*(kmat.*disp_coef));
+    nY=floor(nY/nR);
+    K=1:Blength;
+    use_autoRg=1;
+    RgFlow=[60 110];
+    jsurf=zeros(4);
+    IMcropRg=1:(SPL/2);
+    nZcrop=numel(IMcropRg);
+    imshowrgZ=1:nZcrop;
+    jusamp=zeros(nZcrop,nX,4);
+    winG =   tukeywin(Blength,0.25);
+    %(a)subWins: params for split spectrum DOPU
+    nWin = 9; 
+    winL = 2*Blength/(nWin+1);
+    winG=tukeywin(winL,0.25);
+    winG_whole = tukeywin(Blength,0.25); % window for whole spectrum
+    windex=1:winL/2:Blength;
     
     if useref==1 %use the first 50k a-lines to calc ref
         fseek(fid,bob,'bof');
@@ -345,19 +336,21 @@ for nr = [nR]
             %% check results from a frame
             if show_img
             imgcRg = 1:320;
-            figure(1);imshow(20*log10(abs(IMG2_wholeStr(:,:,1))),[80 120]);title('single channel rep1 Structure')
-            figure(2);imshow(20*log10(mean(abs(IMG1_wholeStr(:,:,:)),3)),[80 120]);title('single channel avg Structure')
-            figure(3);imshow(squeeze(Strus(:,:,iY)),[170 245]);title('merged avg Stru')
-            figure(4);imshow(squeeze(Smap_rep1(:,:,:,iY)),[]);title('rep1 Stokes')
-            figure(5);imshow(squeeze(Smap_avg(:,:,:,iY)),[]);title('avg Stokes')
-            figure(6);imshow(squeeze(Stru_OAC(:,:,iY)),[0 3]);title('oac')
-            hold on;plot(topLines(:,iY),'-r');hold off;
-            figure(7);imshow(squeeze(LA_c_cfg2_avg(:,:,:,iY))/2+0.5,[]);title('LA cfg1 avg')
-            figure(8);imagesc(squeeze(PhR_c_cfg2_avg(:,:,200)),[0 0.5]);title('PhR cfg2 avg')
-            figure(7);imshow(squeeze(cumLA_cfg2_avg(:,:,:,200))/2+0.5,[]);title('LA cfg2 avg')
-            figure(9);imshow(squeeze(LA_c_cfg1_eig(:,:,:,iY))/2+0.5,[]);title('LA cfg1 eig')
-            figure(10);imagesc(squeeze(PhR_c_cfg1_eig(:,:,iY)),[0 0.5]);title('PhR cfg1 eig')
+    %         figure(1);imshow(20*log10(abs(IMG2_wholeStr(:,:,1))),[80 120]);title('single channel rep1 Structure')
+    %         figure(2);imshow(20*log10(mean(abs(IMG1_wholeStr(:,:,:)),3)),[80 120]);title('single channel avg Structure')
+    %         figure(3);imshow(squeeze(Strus(:,:,iY)),[170 245]);title('merged avg Stru')
+    %         figure(4);imshow(squeeze(Smap_rep1(:,:,:,iY)),[]);title('rep1 Stokes')
+    %         figure(5);imshow(squeeze(Smap_avg(:,:,:,iY)),[]);title('avg Stokes')
+    % %         figure(6);imshow(squeeze(Stru_OAC(:,:,iY)),[0 3]);title('oac')
+    %         hold on;plot(topLines(:,iY),'-r');hold off;
+    %         figure(7);imshow(squeeze(LA_c_cfg2_avg(:,:,:,iY))/2+0.5,[]);title('LA cfg1 avg')
+    %         figure(8);imagesc(squeeze(PhR_c_cfg2_avg(:,:,200)),[0 0.5]);title('PhR cfg2 avg')
+    %         figure(7);imshow(squeeze(cumLA_cfg2_avg(:,:,:,200))/2+0.5,[]);title('LA cfg2 avg')
+    %         figure(9);imshow(squeeze(LA_c_cfg1_eig(:,:,:,iY))/2+0.5,[]);title('LA cfg1 eig')
+    %         figure(10);imagesc(squeeze(PhR_c_cfg1_eig(:,:,iY)),[0 0.5]);title('PhR cfg1 eig')
             end
+            
+    %%
             fclose(fid);
             pb.progress;
     end
@@ -372,6 +365,12 @@ for nr = [nR]
         end
         SS=Strus(:,:,slice_index);strUrg = max(SS(:))-5;strLrg = min(SS(:))+5;
         for i=1:size(Strus,3)
+          SS1=Strus(:,:,i);
+          Struc(:,:,:,i)=(SS1-strLrg)./(strUrg-strLrg);
+        end
+        [Struc_flat] = volFlatten(Struc,topLines);
+        dicomwrite(uint8(255*(Struc)),[foutputdir,name,'_1-1_Struc.dcm']);
+        dicomwrite(uint8(255*(Struc_flat)),[foutputdir,name,'_1-1_Struc_flat.dcm']);
         writematrix([strLrg strUrg],[foutputdir,name,'_1-1_StrucRg.txt']);
         dicomwrite(uint8(255*(Smap_rep1/2+0.5)),[foutputdir,name,'_1-3_1rep-Stokes.dcm']);
         dicomwrite(uint8(255*(Smap_avg/2+0.5)),[foutputdir,name,'_1-3_4rep-Stokes.dcm']);
@@ -396,17 +395,17 @@ for nr = [nR]
                 [LA_Ms_cfg1_rmBG_hsv(:,:,:,iY)] = quColoring(LA_Ms_cfg1_rmBG(:,:,:,iY),rotAngle);
                 
             end
-            dicomwrite(uint8(255*(cumLA_cfg1_avg/2+0.5)),[foutputdir,name,'_2-1_cumLA-',num2str(nr),'repAvg.dcm']);
-            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_2-2_cumLA-',num2str(nr),'repAvg_hsvColoring.dcm']);
-            dicomwrite(uint8(255*(LA_c_cfg1_avg/2+0.5)),[foutputdir,name,'_2-3_drLA-',num2str(nr),'repAvg.dcm']);
-            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_2-4_drLA-',num2str(nr),'repAvg_hsvColoring.dcm']);
-            dicomwrite(PRRc,[foutputdir,name,'_2-5_PhR-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*(cumLA_cfg1_avg/2+0.5)),[foutputdir,name,'_2-1_cumLA-cfg1-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_2-2_cumLA-cfg1-',num2str(nr),'repAvg_hsvColoring.dcm']);
+            dicomwrite(uint8(255*(LA_c_cfg1_avg/2+0.5)),[foutputdir,name,'_2-3_drLA-cfg1-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_2-4_drLA-cfg1-',num2str(nr),'repAvg_hsvColoring.dcm']);
+            dicomwrite(PRRc,[foutputdir,name,'_2-5_PhR-cfg1-',num2str(nr),'repAvg.dcm']);
             
-            dicomwrite(uint8(255*(cumLA_Ms_cfg1_rmBG/2+0.5)),[foutputdir,name,'_2-6_cumLA_rmBG-',num2str(nr),'repAvg.dcm']);
-            dicomwrite(uint8(255*cumLA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2-7_cumLA_rmBG-',num2str(nr),'repAvg_hsvColoring.dcm']);
-            dicomwrite(uint8(255*(LA_Ms_cfg1_rmBG/2+0.5)),[foutputdir,name,'_2-8_drLA_rmBG-',num2str(nr),'repAvg.dcm']);
-            dicomwrite(uint8(255*LA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2-9_drLA_rmBG-',num2str(nr),'repAvg_hsvColoring.dcm']);
-            dicomwrite(PRRc_rmBG,[foutputdir,name,'_2-10_PhR_rmBG-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*(cumLA_Ms_cfg1_rmBG/2+0.5)),[foutputdir,name,'_2-6_cumLA_rmBG-cfg1-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*cumLA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2-7_cumLA_rmBG-cfg1-',num2str(nr),'repAvg_hsvColoring.dcm']);
+            dicomwrite(uint8(255*(LA_Ms_cfg1_rmBG/2+0.5)),[foutputdir,name,'_2-8_drLA_rmBG-cfg1-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*LA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2-9_drLA_rmBG-cfg1-',num2str(nr),'repAvg_hsvColoring.dcm']);
+            dicomwrite(PRRc_rmBG,[foutputdir,name,'_2-10_PhR_rmBG-cfg1-',num2str(nr),'repAvg.dcm']);
         end
         if do_eig
             for iY =1:nY
@@ -414,11 +413,11 @@ for nr = [nR]
                 [cumLA_cfg_hsv(:,:,:,iY)] = quColoring(cumLA_cfg1_eig(:,:,:,iY),rotAngle);
                 [LA_cfg_hsv(:,:,:,iY)] = quColoring(LA_c_cfg1_eig(:,:,:,iY),rotAngle);
             end
-            dicomwrite(uint8(255*(cumLA_cfg1_eig/2+0.5)),[foutputdir,name,'_2-6_cumLA-',num2str(nr),'repEig.dcm']);
-            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_2-7_cumLA-',num2str(nr),'repEig_hsvColoring.dcm']);
-            dicomwrite(uint8(255*(LA_c_cfg1_eig/2+0.5)),[foutputdir,name,'_2-8_drLA-',num2str(nr),'repEig.dcm']);
-            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_2-9_drLA-',num2str(nr),'repEig_hsvColoring.dcm']);
-            dicomwrite(PRRc,[foutputdir,name,'_2-10_PhR-',num2str(nr),'repEig.dcm']);
+            dicomwrite(uint8(255*(cumLA_cfg1_eig/2+0.5)),[foutputdir,name,'_2-6_cumLA-cfg1-',num2str(nr),'repEig.dcm']);
+            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_2-7_cumLA-cfg1-',num2str(nr),'repEig_hsvColoring.dcm']);
+            dicomwrite(uint8(255*(LA_c_cfg1_eig/2+0.5)),[foutputdir,name,'_2-8_drLA-cfg1-',num2str(nr),'repEig.dcm']);
+            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_2-9_drLA-cfg1-',num2str(nr),'repEig_hsvColoring.dcm']);
+            dicomwrite(PRRc,[foutputdir,name,'_2-10_PhR-cfg1-',num2str(nr),'repEig.dcm']);
         end
         end
 
@@ -431,11 +430,11 @@ for nr = [nR]
                 [cumLA_cfg_hsv(:,:,:,iY)] = quColoring(cumLA_cfg2_avg(:,:,:,iY));
                 [LA_cfg_hsv(:,:,:,iY)] = quColoring(LA_c_cfg2_avg(:,:,:,iY));
             end
-            dicomwrite(uint8(255*(cumLA_cfg2_avg/2+0.5)),[foutputdir,name,'_3-1_cumLA-',num2str(nr),'repAvg.dcm']);
-            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_3-2_cumLA-',num2str(nr),'repAvg_hsvColoring.dcm']);
-            dicomwrite(uint8(255*(LA_c_cfg2_avg/2+0.5)),[foutputdir,name,'_3-3_drLA-',num2str(nr),'repAvg.dcm']);
-            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_3-4_drLA-',num2str(nr),'repAvg_hsvColoring.dcm']);
-            dicomwrite(PRRc,[foutputdir,name,'_3-5_PhR-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*(cumLA_cfg2_avg/2+0.5)),[foutputdir,name,'_3-1_cumLA-cfg2-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_3-2_cumLA-cfg2-',num2str(nr),'repAvg_hsvColoring.dcm']);
+            dicomwrite(uint8(255*(LA_c_cfg2_avg/2+0.5)),[foutputdir,name,'_3-3_drLA-cfg2-',num2str(nr),'repAvg.dcm']);
+            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_3-4_drLA-cfg2-',num2str(nr),'repAvg_hsvColoring.dcm']);
+            dicomwrite(PRRc,[foutputdir,name,'_3-5_PhR-cfg2-',num2str(nr),'repAvg.dcm']);
         end
         if do_eig
             for iY =1:nY
@@ -443,11 +442,11 @@ for nr = [nR]
                 [cumLA_cfg_hsv(:,:,:,iY)] = quColoring(cumLA_cfg2_eig(:,:,:,iY));
                 [LA_cfg_hsv(:,:,:,iY)] = quColoring(LA_c_cfg2_eig(:,:,:,iY));
             end
-            dicomwrite(uint8(255*(cumLA_cfg2_eig/2+0.5)),[foutputdir,name,'_3-6_cumLA-',num2str(nr),'repEig.dcm']);
-            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_3-7_cumLA-',num2str(nr),'repEig_hsvColoring.dcm']);
-            dicomwrite(uint8(255*(LA_c_cfg2_eig/2+0.5)),[foutputdir,name,'_3-8_drLA-',num2str(nr),'repEig.dcm']);
-            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_3-9_drLA-',num2str(nr),'repEig_hsvColoring.dcm']);
-            dicomwrite(PRRc,[foutputdir,name,'_3-10_PhR-',num2str(nr),'repEig.dcm']);
+            dicomwrite(uint8(255*(cumLA_cfg2_eig/2+0.5)),[foutputdir,name,'_3-6_cumLA-cfg2-',num2str(nr),'repEig.dcm']);
+            dicomwrite(uint8(255*cumLA_cfg_hsv),[foutputdir,name,'_3-7_cumLA-cfg2-',num2str(nr),'repEig_hsvColoring.dcm']);
+            dicomwrite(uint8(255*(LA_c_cfg2_eig/2+0.5)),[foutputdir,name,'_3-8_drLA-cfg2-',num2str(nr),'repEig.dcm']);
+            dicomwrite(uint8(255*LA_cfg_hsv),[foutputdir,name,'_3-9_drLA-cfg2-',num2str(nr),'repEig_hsvColoring.dcm']);
+            dicomwrite(PRRc,[foutputdir,name,'_3-10_PhR-cfg2-',num2str(nr),'repEig.dcm']);
         end
         end
 
@@ -456,13 +455,7 @@ for nr = [nR]
     fprintf('输出目录: %s\n', foutputdir);
     fprintf('\n');
 end
-        SS1=Strus(:,:,i);
-          Struc(:,:,:,i)=(SS1-strLrg)./(strUrg-strLrg);
-        end
-        [Struc_flat] = volFlatten(Struc,topLines);
-        dicomwrite(uint8(255*(Struc)),[foutputdir,name,'_1-1_Struc.dcm']);
-        dicomwrite(uint8(255*(Struc_flat)),[foutputdir,name,'_1-1_Struc_flat.dcm']);
-  
+
 end
 
 %%
