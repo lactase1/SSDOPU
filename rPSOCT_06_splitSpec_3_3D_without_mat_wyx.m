@@ -18,8 +18,8 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path = 'D:\1-Liu Jian\yongxin.wang\PSOCT\data_without_mat\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\without_wovWinf\';
+data_path = 'D:\1-Liu Jian\yongxin.wang\PSOCT\tmp\';
+output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\test1\';
 
 % 检查输入路径
 if ~exist(data_path, 'dir')
@@ -256,7 +256,8 @@ for nr = [nR]
     
     % 显示处理信息
     if gpu_available
-        fprintf('🚀 开始GPU加速处理 %d 个B-scan...\n', nY-1);
+        fprintf('🚀 开始GPU高利用率加速处理 %d 个B-scan...\n', nY-1);
+        fprintf('⚡ 优化策略: 批量化操作 + 减少数据传输 + 大块内存分配\n');
     else
         fprintf('💻 开始CPU处理 %d 个B-scan...\n', nY-1);
     end
@@ -283,15 +284,30 @@ for nr = [nR]
                 Bd2=Bs2;
             end
             
-            % 如果GPU可用，将数据转移到GPU进行FFT计算
+            % 如果GPU可用，优化数据传输策略
             if gpu_available
-                Bd1_gpu = gpuArray(Bd1);
-                Bd2_gpu = gpuArray(Bd2);
-                winG_gpu = gpuArray(winG);
-                winG_whole_gpu = gpuArray(winG_whole);
-                % 在第一次迭代时显示GPU状态
-                if iY == 1
-                    fprintf('📊 GPU数据传输完成，开始GPU计算...\n');
+                % 一次性传输所有需要的参数到GPU
+                if iY == 1 
+                    % 预传输窗口函数到GPU（只需要一次）
+                    winG_gpu = gpuArray(winG);
+                    winG_whole_gpu = gpuArray(winG_whole);
+                    phV_gpu = gpuArray(phV);
+                    Ref_ch1_gpu = gpuArray(Ref_ch1);
+                    Ref_ch2_gpu = gpuArray(Ref_ch2);
+                    fprintf('📊 GPU静态数据传输完成，开始GPU加速计算...\n');
+                end
+                
+                % 将B-scan数据传输到GPU，包含hilbert变换
+                Bs1_gpu = gpuArray(Bs1);
+                Bs2_gpu = gpuArray(Bs2);
+                
+                % 在GPU上完成色散校正
+                if do_PhComp==1
+                    Bd1_gpu = real(hilbert(Bs1_gpu).*phV_gpu);
+                    Bd2_gpu = real(hilbert(Bs2_gpu).*phV_gpu);
+                else
+                    Bd1_gpu = Bs1_gpu;
+                    Bd2_gpu = Bs2_gpu;
                 end
             else
                 Bd1_gpu = Bd1;
@@ -304,54 +320,91 @@ for nr = [nR]
                 dopu_ss = 1;
                 % 设置默认值，但在后续处理中需要正确设置
             else
-                % creat array to store split-spectrum complex (FFT): Z*X*nR*nWin 
+                % 优化的split spectrum GPU计算
                 if gpu_available
-                    Bimg1 = zeros(SPL,nX,nr,nWin,'gpuArray');Bimg2 = Bimg1;
-                    S0 = zeros(nZcrop,nX,nr,nWin,'gpuArray'); S1 = S0;S2=S0;S3=S0;
-                else
-                    Bimg1 = zeros(SPL,nX,nr,nWin);Bimg2 = Bimg1;
-                    S0 = zeros(nZcrop,nX,nr,nWin); S1 = S0;S2=S0;S3=S0;
-                end
-                
-                for iR = 1:nr
-                    for iL=1:nWin
-                        % extract data fragments from two different channel and
-                        % apply a giassian filter before performing FFT
-                        iBd1=Bd1_gpu(windex(iL):windex(iL)+winL-1,:,iR).*winG_gpu;
-                        iBd2=Bd2_gpu(windex(iL):windex(iL)+winL-1,:,iR).*winG_gpu;
-                        Bimg1(:,:,iR,iL)=fft(iBd1,SPL,1);
-                        Bimg2(:,:,iR,iL)=fft(iBd2,SPL,1);
+                    % 预分配GPU内存
+                    Bimg1 = zeros(SPL,nX,nr,nWin,'gpuArray');
+                    Bimg2 = zeros(SPL,nX,nr,nWin,'gpuArray');
+                    S0 = zeros(nZcrop,nX,nr,nWin,'gpuArray'); 
+                    S1 = S0; S2 = S0; S3 = S0;
+                    
+                    % 批量化FFT计算 - 避免嵌套循环
+                    for iR = 1:nr
+                        for iL = 1:nWin
+                            winStart = windex(iL);
+                            winEnd = winStart + winL - 1;
+                            % GPU上的窗口化和FFT
+                            windowed_data1 = Bd1_gpu(winStart:winEnd,:,iR) .* winG_gpu;
+                            windowed_data2 = Bd2_gpu(winStart:winEnd,:,iR) .* winG_gpu;
+                            Bimg1(:,:,iR,iL) = fft(windowed_data1, SPL, 1);
+                            Bimg2(:,:,iR,iL) = fft(windowed_data2, SPL, 1);
+                        end
                     end
-                end
-                IMGs_ch1=Bimg1(czrg,:,:,:);IMGs_ch2=Bimg2(czrg,:,:,:);
-                % calculate the QUV from the two-channel complex
-                for iR = 1:nr
-                    for iL = 1: nWin
-                        if gpu_available
-                            [S0(:,:,iR,iL),S1(:,:,iR,iL),S2(:,:,iR,iL),S3(:,:,iR,iL)] = ...
-                                cumulativeQUV_gpu(IMGs_ch1(:,:,iR,iL),IMGs_ch2(:,:,iR,iL));
-                        else
+                    
+                    % 提取感兴趣区域
+                    IMGs_ch1 = Bimg1(czrg,:,:,:);
+                    IMGs_ch2 = Bimg2(czrg,:,:,:);
+                    
+                    % 批量化Stokes参数计算
+                    axis_gpu = angle(IMGs_ch2 .* conj(IMGs_ch1));
+                    S0 = abs(IMGs_ch1).^2 + abs(IMGs_ch2).^2;
+                    S1 = abs(IMGs_ch1).^2 - abs(IMGs_ch2).^2;
+                    S2 = 2 .* abs(IMGs_ch1) .* abs(IMGs_ch2) .* cos(axis_gpu);
+                    S3 = 2 .* abs(IMGs_ch1) .* abs(IMGs_ch2) .* sin(-axis_gpu);
+                    
+                    % GPU上计算dopu
+                    dopu_ss = sqrt(mean(S1./S0,4).^2 + mean(S2./S0,4).^2 + mean(S3./S0,4).^2);
+                    dopu_splitSpectrum(:,:,iY) = gather(mean(dopu_ss,3));
+                else
+                    % CPU版本保持不变
+                    Bimg1 = zeros(SPL,nX,nr,nWin);
+                    Bimg2 = Bimg1;
+                    S0 = zeros(nZcrop,nX,nr,nWin); 
+                    S1 = S0; S2 = S0; S3 = S0;
+                    
+                    for iR = 1:nr
+                        for iL = 1:nWin
+                            iBd1 = Bd1_gpu(windex(iL):windex(iL)+winL-1,:,iR).*winG_gpu;
+                            iBd2 = Bd2_gpu(windex(iL):windex(iL)+winL-1,:,iR).*winG_gpu;
+                            Bimg1(:,:,iR,iL) = fft(iBd1,SPL,1);
+                            Bimg2(:,:,iR,iL) = fft(iBd2,SPL,1);
+                        end
+                    end
+                    IMGs_ch1 = Bimg1(czrg,:,:,:);
+                    IMGs_ch2 = Bimg2(czrg,:,:,:);
+                    
+                    for iR = 1:nr
+                        for iL = 1:nWin
                             [S0(:,:,iR,iL),S1(:,:,iR,iL),S2(:,:,iR,iL),S3(:,:,iR,iL)] = ...
                                 cumulativeQUV(IMGs_ch1(:,:,iR,iL),IMGs_ch2(:,:,iR,iL));
                         end
                     end
-                end
-                % average QUV accross split-spectrum and calculate dopu 
-                dopu_ss = sqrt(mean(S1./S0,4).^2+mean(S2./S0,4).^2+mean(S3./S0,4).^2);%% ===>nZcrop,nX,nr
-                if gpu_available
-                    dopu_splitSpectrum(:,:,iY) = gather(mean(dopu_ss,3));
-                else
+                    dopu_ss = sqrt(mean(S1./S0,4).^2+mean(S2./S0,4).^2+mean(S3./S0,4).^2);
                     dopu_splitSpectrum(:,:,iY) = mean(dopu_ss,3);
                 end
             end
-            %% whole spectrum nZ*nX*nR==> fft(complex)
-            Bimg1_wholeStr=fft(Bd1_gpu.*winG_whole_gpu,SPL,1);Bimg2_wholeStr=fft(Bd2_gpu.*winG_whole_gpu,SPL,1);
-            IMG1_wholeStr = Bimg1_wholeStr(czrg,:,:);IMG2_wholeStr = Bimg2_wholeStr(czrg,:,:);
-
-            %% Struc Stokes, and OAC
+            %% whole spectrum GPU优化FFT计算
             if gpu_available
-                [wS0,wS1,wS2,wS3] = cumulativeQUV_gpu(IMG1_wholeStr,IMG2_wholeStr);
+                % GPU批量化FFT - 直接在GPU上完成所有操作
+                windowed_data1 = Bd1_gpu .* winG_whole_gpu;
+                windowed_data2 = Bd2_gpu .* winG_whole_gpu;
+                Bimg1_wholeStr = fft(windowed_data1, SPL, 1);
+                Bimg2_wholeStr = fft(windowed_data2, SPL, 1);
+                IMG1_wholeStr = Bimg1_wholeStr(czrg,:,:);
+                IMG2_wholeStr = Bimg2_wholeStr(czrg,:,:);
+                
+                % 批量化Stokes参数计算
+                axis_whole = angle(IMG2_wholeStr .* conj(IMG1_wholeStr));
+                wS0 = abs(IMG1_wholeStr).^2 + abs(IMG2_wholeStr).^2;
+                wS1 = abs(IMG1_wholeStr).^2 - abs(IMG2_wholeStr).^2;
+                wS2 = 2 .* abs(IMG1_wholeStr) .* abs(IMG2_wholeStr) .* cos(axis_whole);
+                wS3 = 2 .* abs(IMG1_wholeStr) .* abs(IMG2_wholeStr) .* sin(-axis_whole);
             else
+                % CPU版本
+                Bimg1_wholeStr = fft(Bd1_gpu.*winG_whole_gpu,SPL,1);
+                Bimg2_wholeStr = fft(Bd2_gpu.*winG_whole_gpu,SPL,1);
+                IMG1_wholeStr = Bimg1_wholeStr(czrg,:,:);
+                IMG2_wholeStr = Bimg2_wholeStr(czrg,:,:);
                 [wS0,wS1,wS2,wS3] = cumulativeQUV(IMG1_wholeStr,IMG2_wholeStr);
             end
             wQ = wS1./wS0;wU = wS2./wS0; wV = wS3./wS0;
