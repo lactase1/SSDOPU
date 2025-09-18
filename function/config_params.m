@@ -17,7 +17,7 @@ params = struct();
 
 %% ========== TIFF生成控制参数 ==========
 params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
-params.tiff.tiff_frame = 320;     % 要提取的帧数(默认300)
+params.tiff.tiff_frame = 320;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
 %% ========== DOPU增强处理参数 ==========

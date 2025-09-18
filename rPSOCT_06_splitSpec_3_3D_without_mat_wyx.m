@@ -104,7 +104,7 @@ file_start_time = tic;
 
 % 启动并行池
 if isempty(gcp('nocreate'))
-    parpool('local', 34);
+    parpool('local', 44);
 end
 
 params = config_params();
@@ -225,9 +225,8 @@ for nr = [nR]
     Smap_avg = zeros(numel(czrg),nX,3,nY);Smap_rep1 = zeros(numel(czrg),nX,3,nY);
     Strus = zeros(numel(czrg),nX,nY);Stru_OAC = Strus;
     dopu_splitSpectrum = zeros(numel(czrg),nX,nY);
-    parfor iY=1:nY-1 % Bscan number (parfor不支持指定步长)
-        % for iY=1:50:nY-1 % Bscan number
-        % for iY = 478 % ===============================>>>>>>>>>>> run single B scan
+    fprintf('开始处理 %d 个B-Scan...\n', nY);
+    parfor iY=1:nY % Bscan number (parfor不支持指定步长)
         
         Bs1=zeros(Blength,nX,nr);
         Bs2=zeros(Blength,nX,nr);
@@ -319,7 +318,6 @@ for nr = [nR]
         end
         fclose(fid);
     end
-    pb.stop;
     fclose all;
     %% save results: strus(flow),stokes,oac
     if params.tiff.saveDicom
@@ -416,6 +414,19 @@ for nr = [nR]
         end
         
     end% save results
+    
+    %% DCM到TIFF转换功能
+    if params.tiff.saveDicom && params.tiff.make_tiff
+        fprintf('\n开始DCM到TIFF转换...\n');
+        try
+            % 调用本地DCM到TIFF转换函数
+            convert_dcm_to_tiff_local(foutputdir, params.tiff.tiff_frame, name);
+        catch ME
+            fprintf('DCM到TIFF转换出错: %s\n', ME.message);
+            % 转换出错不影响主流程，继续执行
+        end
+    end
+    
     fprintf('文件 %s 处理完成!\n', display_name);
     fprintf('输出目录: %s\n', foutputdir);
     
@@ -870,4 +881,102 @@ hsvLA = reshape(colorInds,[size(thetasInds),3]);
 if showimg
     figure;imshow(hsvLA,[]);
 end
+end
+
+%% ====================================================================================
+% 函数名: convert_dcm_to_tiff_local
+% 功能: 快速提取DCM文件指定帧并转换为单帧TIFF文件
+% 输入参数:
+%   dcm_folder - DCM文件所在文件夹路径
+%   target_frame - 目标帧号(从1开始)
+%   output_prefix - 输出文件前缀名(可选)
+% 输出: 在dcm_folder内创建tiff文件夹，保存单帧TIFF文件
+% ====================================================================================
+function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_prefix)
+% 参数检查和默认值设置
+if nargin < 2
+    error('至少需要提供DCM文件夹路径和目标帧号');
+end
+
+if nargin < 3
+    output_prefix = '';
+end
+
+% 检查DCM文件夹是否存在
+if ~exist(dcm_folder, 'dir')
+    error(['DCM文件夹不存在: ' dcm_folder]);
+end
+
+% 创建输出目录 - 直接在DCM文件夹内创建tiff子目录
+tiff_output_dir = fullfile(dcm_folder, 'tiff');
+
+if ~exist(tiff_output_dir, 'dir')
+    mkdir(tiff_output_dir);
+end
+
+% 查找所有DCM文件
+dcm_files = dir(fullfile(dcm_folder, '*.dcm'));
+
+if isempty(dcm_files)
+    warning(['在指定目录中未找到DCM文件: ' dcm_folder]);
+    return;
+end
+
+fprintf('转换 %d 个DCM文件的第%d帧到TIFF...\n', length(dcm_files), target_frame);
+
+% 处理每个DCM文件
+success_count = 0;
+for i = 1:length(dcm_files)
+    dcm_filename = dcm_files(i).name;
+    dcm_filepath = fullfile(dcm_folder, dcm_filename);
+    
+    try
+        % 读取DCM文件
+        dcm_data = dicomread(dcm_filepath);
+        
+        % 确定帧的位置
+        if ndims(dcm_data) == 4
+            [~, ~, ~, total_frames] = size(dcm_data);
+            frame_dim = 4;
+        elseif ndims(dcm_data) == 3
+            [~, ~, total_frames] = size(dcm_data);
+            frame_dim = 3;
+        else
+            % 2D图像，直接保存
+            frame_dim = 0;
+            total_frames = 1;
+        end
+        
+        % 提取目标帧
+        if frame_dim == 0
+            frame_data = dcm_data;
+        else
+            actual_frame = min(target_frame, total_frames);
+            if frame_dim == 4
+                frame_data = dcm_data(:, :, :, actual_frame);
+            else
+                frame_data = dcm_data(:, :, actual_frame);
+            end
+        end
+        
+        % 生成输出文件名
+        [~, base_name, ~] = fileparts(dcm_filename);
+        if isempty(output_prefix)
+            tiff_filename = sprintf('%s_frame%d.tiff', base_name, target_frame);
+        else
+            tiff_filename = sprintf('%s_%s_frame%d.tiff', output_prefix, base_name, target_frame);
+        end
+        tiff_filepath = fullfile(tiff_output_dir, tiff_filename);
+        
+        % 保存为单帧TIFF文件
+        imwrite(frame_data, tiff_filepath);
+        success_count = success_count + 1;
+        
+    catch ME
+        fprintf('处理文件 %s 出错: %s\n', dcm_filename, ME.message);
+        continue;
+    end
+end
+
+fprintf('完成! 成功转换 %d/%d 个文件到: %s\n', success_count, length(dcm_files), tiff_output_dir);
 end
