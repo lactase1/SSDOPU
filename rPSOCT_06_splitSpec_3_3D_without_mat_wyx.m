@@ -20,7 +20,7 @@ end
 
 % 设置数据路径
 data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT\tmp\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-17\ssdopu';
+output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\normal';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -104,7 +104,7 @@ file_start_time = tic;
 
 % 启动并行池
 if isempty(gcp('nocreate'))
-    parpool('local', 44);
+    parpool('local', 48);  
 end
 
 params = config_params();
@@ -167,7 +167,7 @@ nWin = 9;
 winL = 2*Blength/(nWin+1);
 winG=tukeywin(winL,0.25);
 winG_whole = tukeywin(Blength,0.25); % window for whole spectrum
-windex=1:winL/2:Blength;
+windex=1 : winL / 2 : Blength;
 
 if params.processing.useref==1 %use the first 50k a-lines to calc ref
     fseek(fid,bob,'bof');
@@ -192,7 +192,7 @@ end
 
 
 %(b) Calculates the Cumulative Stokes parameters I,Q,U,V
-for nr = [nR]
+for nr = nR
     if params.range.setZrg
         foutputdir = fullfile(output_base,[name,'.rep',num2str(nr),'fastZ_testDDG',num2str(params.range.setZrg),'\']);
     else
@@ -200,27 +200,33 @@ for nr = [nR]
     end
     if ~exist(foutputdir,'dir'), mkdir(foutputdir); end
     
-    czrg = [21:320];% set z range
-    topLines =ones(nX,nY);
-    if params.processing.hasSeg
-        load([name, '.mat']);
-        topLines = round(topLines);topLines(topLines<=1) = 1;
+    czrg = 1:320;% set z range
+    topLines = ones(nX,nY);
+    % if params.processing.hasSeg
+    %     load([name, '.mat']);
+    %     topLines = round(topLines);topLines(topLines<=1) = 1;
+    % end
+    if params.range.setZrg
+        czrg = czrg(1:round(params.range.setZrg));
     end
-    if params.range.setZrg, czrg = czrg(1:round(params.range.setZrg));end
     nZcrop = numel(czrg);nZ = nZcrop;
     % (c) creat array to store results
-    LA_c_cfg1_avg = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);PhR_c_cfg1_avg = zeros(nZcrop-params.polarization.Avnum,nX,nY);
+    LA_c_cfg1_avg = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
+    PhR_c_cfg1_avg = zeros(nZcrop-params.polarization.Avnum,nX,nY);
     cumLA_cfg1_avg = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
-    LA_c_cfg1_eig = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);PhR_c_cfg1_eig = zeros(nZcrop-params.polarization.Avnum,nX,nY);
+    LA_c_cfg1_eig = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
+    PhR_c_cfg1_eig = zeros(nZcrop-params.polarization.Avnum,nX,nY);
     cumLA_cfg1_eig = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
     
     LA_Ms_cfg1_rmBG = LA_c_cfg1_avg;
     PhR_Ms_cfg1_rmBG = cumLA_cfg1_avg;
     cumLA_Ms_cfg1_rmBG = LA_c_cfg1_eig;
-    
-    LA_c_cfg2_avg = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);PhR_c_cfg2_avg = zeros(nZcrop-params.polarization.Avnum,nX,nY);
+    %% cfg2
+    LA_c_cfg2_avg = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
+    PhR_c_cfg2_avg = zeros(nZcrop-params.polarization.Avnum,nX,nY);
     cumLA_cfg2_avg = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
-    LA_c_cfg2_eig = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);PhR_c_cfg2_eig = zeros(nZcrop-params.polarization.Avnum,nX,nY);
+    LA_c_cfg2_eig = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
+    PhR_c_cfg2_eig = zeros(nZcrop-params.polarization.Avnum,nX,nY);
     cumLA_cfg2_eig = zeros(nZcrop-params.polarization.Avnum,nX,3,nY);
     Smap_avg = zeros(numel(czrg),nX,3,nY);Smap_rep1 = zeros(numel(czrg),nX,3,nY);
     Strus = zeros(numel(czrg),nX,nY);Stru_OAC = Strus;
@@ -250,8 +256,12 @@ for nr = [nR]
             dopu_ss = 1;
         else
             % creat array to store split-spectrum complex (FFT): Z*X*nR*nWin
-            Bimg1 = zeros(SPL,nX,nr,nWin);Bimg2 = Bimg1;
-            S0 = zeros(nZcrop,nX,nr,nWin); S1 = S0;S2=S0;S3=S0;
+            Bimg1 = zeros(SPL,nX,nr,nWin);
+            Bimg2 = Bimg1;
+            S0 = zeros(nZcrop,nX,nr,nWin); 
+            S1 = S0;
+            S2 = S0;
+            S3 = S0;
             for iR = 1:nr
                 for iL=1:nWin
                     % extract data fragments from two different channel and
@@ -316,7 +326,8 @@ for nr = [nR]
                     calLAPhRcfg2(IMG_ch1,IMG_ch2,topLines(:,iY),dopu_splitSpec_M,params.polarization.kRL_cfg2,params.polarization.kRU_cfg2,params.filters.h1,params.filters.h2,params.polarization.Avnum,params.mode.wovWinF);
             end
         end
-        fclose(fid);
+            fclose(fid);
+        end
     end
     fclose all;
     %% save results: strus(flow),stokes,oac
@@ -338,6 +349,7 @@ for nr = [nR]
         dicomwrite(uint8(255*(Smap_rep1/2+0.5)),[foutputdir,name,'_1-3_1rep-Stokes.dcm']);
         dicomwrite(uint8(255*(Smap_avg/2+0.5)),[foutputdir,name,'_1-3_4rep-Stokes.dcm']);
         dicomwrite(uint8(255*(permute(dopu_splitSpectrum,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
+        
         
         if ~params.processing.hasSeg
             save([foutputdir,name, '.mat'],'topLines','czrg');
@@ -438,10 +450,6 @@ for nr = [nR]
     % 清理并行池（在函数结束时）
     delete(gcp('nocreate'));
 end
-
-end
-
-%%
 return;
 
 
@@ -802,10 +810,21 @@ end
 % ====================================================================================
 function [LAs_flat] = volFlatten(LAs, topLines)
 % 获取输入数据的维度信息
-[nZ, nX, nCh, nY] = size(LAs);
+if ndims(LAs) == 4
+    [nZ, nX, nCh, nY] = size(LAs);
+    is4D = true;
+else
+    [nZ, nX, nY] = size(LAs);
+    nCh = 1;
+    is4D = false;
+end
 
 % 初始化输出矩阵
-LAs_flat = zeros(nZ, nX, nCh, nY);
+if is4D
+    LAs_flat = zeros(nZ, nX, nCh, nY);
+else
+    LAs_flat = zeros(nZ, nX, nY);
+end
 
 % 逐个A-line进行展平处理
 for i = 1:nX          % 遍历每条A-line
@@ -815,11 +834,16 @@ for i = 1:nX          % 遍历每条A-line
         effective_length = nZ - topLines(i,j) + 1;
         
         % 将表面以下的数据移动到顶部
-        % 原始数据: LAs(topLines(i,j):nZ, i, :, j)
-        % 目标位置: LAs_flat(1:effective_length, i, :, j)
         if effective_length > 0
-            LAs_flat(1:effective_length, i, :, j) = ...
-                LAs(topLines(i,j):nZ, i, :, j);
+            if is4D
+                % 4D情况：原始数据有多个通道
+                LAs_flat(1:effective_length, i, :, j) = ...
+                    LAs(topLines(i,j):nZ, i, :, j);
+            else
+                % 3D情况：单通道数据
+                LAs_flat(1:effective_length, i, j) = ...
+                    LAs(topLines(i,j):nZ, i, j);
+            end
         end
         
         % 注意：表面以上的区域在LAs_flat中保持为零
@@ -979,4 +1003,107 @@ for i = 1:length(dcm_files)
 end
 
 fprintf('完成! 成功转换 %d/%d 个文件到: %s\n', success_count, length(dcm_files), tiff_output_dir);
+end
+
+%% ====================================================================================
+% 函数名: enhance_dopu_image
+% 功能: 增强DOPU图像，改善对比度和噪声抑制
+% 输入参数:
+%   dopu_data - 原始DOPU数据 [Z×X×Y]
+%   params - 参数结构体，包含增强处理参数
+% 输出参数:
+%   enhanced_dopu - 增强后的DOPU数据 [Z×X×Y]
+%   overlay_result - 结构图像叠加结果(如果启用) [Z×X×3×Y]
+% ====================================================================================
+function [enhanced_dopu, overlay_result] = enhance_dopu_image(dopu_data, params, struct_data)
+% 初始化输出
+enhanced_dopu = dopu_data;
+overlay_result = [];
+
+% 检查是否启用DOPU增强
+if ~params.dopu.enable_enhanced
+    return;
+end
+
+fprintf('应用DOPU增强处理...\n');
+
+%% 1. 噪声抑制 - 基于阈值的噪声去除
+noise_threshold = params.dopu.noise_threshold;
+enhanced_dopu(enhanced_dopu < noise_threshold) = 0;
+
+%% 2. 对比度增强 - 使用CLAHE(限制对比度自适应直方图均衡)
+contrast_factor = params.dopu.contrast_enhance;
+
+% 对每个B-scan切片应用增强
+for iY = 1:size(enhanced_dopu, 3)
+    current_slice = enhanced_dopu(:, :, iY);
+    
+    % 归一化到[0,1]范围
+    if max(current_slice(:)) > min(current_slice(:))
+        current_slice = (current_slice - min(current_slice(:))) / (max(current_slice(:)) - min(current_slice(:)));
+        
+        % 应用对比度增强
+        current_slice = imadjust(current_slice, [], [], contrast_factor);
+        
+        % CLAHE增强(如果图像工具箱可用)
+        try
+            current_slice = adapthisteq(current_slice, 'clipLimit', 0.01, 'Distribution', 'uniform');
+        catch
+            % 如果CLAHE不可用，使用简单的gamma校正
+            current_slice = current_slice .^ 0.7;
+        end
+        
+        enhanced_dopu(:, :, iY) = current_slice;
+    end
+end
+
+%% 3. 边缘保持滤波 - 使用双边滤波去除噪声但保持边缘
+for iY = 1:size(enhanced_dopu, 3)
+    current_slice = enhanced_dopu(:, :, iY);
+    
+    % 简单的双边滤波实现
+    try
+        % 尝试使用内置函数
+        filtered_slice = imbilatfilt(current_slice, 0.1, 2);
+        enhanced_dopu(:, :, iY) = filtered_slice;
+    catch
+        % 如果不可用，使用高斯滤波作为备选
+        h_smooth = fspecial('gaussian', [3 3], 0.5);
+        enhanced_dopu(:, :, iY) = imfilter(current_slice, h_smooth, 'replicate');
+    end
+end
+
+%% 4. 创建结构图像叠加(如果启用且提供了结构数据)
+if params.dopu.create_overlay && nargin >= 3 && ~isempty(struct_data)
+    fprintf('创建DOPU-结构叠加图像...\n');
+    
+    [nZ, nX, nY] = size(enhanced_dopu);
+    overlay_result = zeros(nZ, nX, 3, nY);
+    
+    for iY = 1:nY
+        % 获取当前切片
+        dopu_slice = enhanced_dopu(:, :, iY);
+        struct_slice = struct_data(:, :, iY);
+        
+        % 归一化两个图像到[0,1]
+        if max(dopu_slice(:)) > min(dopu_slice(:))
+            dopu_norm = (dopu_slice - min(dopu_slice(:))) / (max(dopu_slice(:)) - min(dopu_slice(:)));
+        else
+            dopu_norm = dopu_slice;
+        end
+        
+        if max(struct_slice(:)) > min(struct_slice(:))
+            struct_norm = (struct_slice - min(struct_slice(:))) / (max(struct_slice(:)) - min(struct_slice(:)));
+        else
+            struct_norm = struct_slice;
+        end
+        
+        % 创建RGB叠加：红色=结构，绿色=DOPU，蓝色=叠加区域
+        overlay_result(:, :, 1, iY) = struct_norm;                    % 红色通道 - 结构
+        overlay_result(:, :, 2, iY) = dopu_norm;                      % 绿色通道 - DOPU
+        overlay_result(:, :, 3, iY) = struct_norm .* dopu_norm;       % 蓝色通道 - 叠加
+    end
+end
+
+fprintf('DOPU增强处理完成\n');
 end

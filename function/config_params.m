@@ -17,7 +17,7 @@ params = struct();
 
 %% ========== TIFF生成控制参数 ==========
 params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
-params.tiff.tiff_frame = 320;     % 要提取的帧号(默认160，即中间帧)
+params.tiff.tiff_frame = 270;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
 %% ========== DOPU增强处理参数 ==========
@@ -46,7 +46,7 @@ params.mode.do_cfg1 = 1;                       % 是否启用配置1
 % 配置2: 相位延迟分析 (Phase Retardation calculation) 
 params.mode.do_cfg2 = 0;                       % 是否启用配置2
 % 滤波模式
-params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
+params.mode.wovWinF = 1;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
@@ -60,13 +60,13 @@ params.dopu.do_eig = 0;                        % 是否使用特征值方法 (1:
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置
-params.polarization.Avnum_initial = 5;         % 初始平均层数(适当减小以提高分辨率)
-params.polarization.Avnum = 5;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum_initial = 7;         % 初始平均层数(适当减小以提高分辨率)
+params.polarization.Avnum = 4;                 % DDG测试用平均层数(统一使用以保持一致性)
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
 % 调整为更适合巩膜结构特征的范围
-params.polarization.kRL_cfg1 = 1;              % 配置1滤波核下限(减小以保持细节)
-params.polarization.kRU_cfg1 = 9;              % 配置1滤波核上限(适当增加覆盖范围)
+params.polarization.kRL_cfg1 = 8;              % 配置1滤波核下限(减小以保持细节)
+params.polarization.kRU_cfg1 = 15;              % 配置1滤波核上限(适当增加覆盖范围)
 
 % 配置2滤波核范围 (用于相位延迟PhR计算)
 % 相位延迟测量需要更大的统计区域以提高精度  
@@ -82,7 +82,7 @@ params.polarization.kRU_cfg2 = 15;             % 配置2滤波核上限(减小�
 
 % 小尺度高斯核 (用于细节保持和初步降噪) - 优化版
 params.filters.h1_size = [7 7];                % 高斯核1尺寸 (增大以更好抑制噪声)
-params.filters.h1_sigma = 2.5;                 % 高斯核1标准差 (提高以改善分层效果)
+params.filters.h1_sigma = 4;                 % 高斯核1标准差 (提高以改善分层效果)
 params.filters.h1 = fspecial('gaussian', params.filters.h1_size, params.filters.h1_sigma);
 
 % 中尺度高斯核 (用于结构增强和背景平滑) - 优化版
@@ -151,8 +151,4 @@ if nargout == 0
     fprintf('滤波模式: %s\n', iif(params.mode.wovWinF, '固定高斯', '自适应DOPU'));
     fprintf('平均层数: %d\n', params.polarization.Avnum);
     fprintf('==========================\n\n');
-end
-
-
-
 end
