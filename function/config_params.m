@@ -46,7 +46,7 @@ params.mode.do_cfg1 = 1;                       % 是否启用配置1
 % 配置2: 相位延迟分析 (Phase Retardation calculation) 
 params.mode.do_cfg2 = 0;                       % 是否启用配置2
 % 滤波模式
-params.mode.wovWinF = 1;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
+params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
@@ -65,8 +65,8 @@ params.polarization.Avnum = 4;                 % DDG测试用平均层数(统一
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
 % 调整为更适合巩膜结构特征的范围
-params.polarization.kRL_cfg1 = 8;              % 配置1滤波核下限(减小以保持细节)
-params.polarization.kRU_cfg1 = 15;              % 配置1滤波核上限(适当增加覆盖范围)
+params.polarization.kRL_cfg1 = 16;              % 配置1滤波核下限(减小以保持细节)
+params.polarization.kRU_cfg1 = 23;              % 配置1滤波核上限(适当增加覆盖范围)
 
 % 配置2滤波核范围 (用于相位延迟PhR计算)
 % 相位延迟测量需要更大的统计区域以提高精度  

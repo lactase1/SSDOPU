@@ -20,7 +20,7 @@ end
 
 % 设置数据路径
 data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT\tmp\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\normal';
+output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -84,7 +84,7 @@ input_file_path = varargin{1};
 if nargin >= 2
     output_base = varargin{2};
 else
-    output_base = 'D:\1-Liu Jian\yongxin.wang\DOPU_output\';
+    output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
 end
 
 % 检查输入文件是否存在
