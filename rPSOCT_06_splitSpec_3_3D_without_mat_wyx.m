@@ -19,8 +19,8 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT\tmp\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
+data_path   = 'D:\1-Liu Jian\yongxin.wang\nail';
+output_base = 'D:\1-Liu Jian\yongxin.wang\Output';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -84,7 +84,7 @@ input_file_path = varargin{1};
 if nargin >= 2
     output_base = varargin{2};
 else
-    output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
+    output_base = 'D:1-Liu Jianyongxin.wangOutputssdopu-h1_5x5-sigma_3';
 end
 
 % 检查输入文件是否存在
@@ -295,7 +295,11 @@ for nr = nR
         Strus(:,:,iY) = 20*log10(strLin);
         Smap_avg(:,:,:,iY) = cat(3,mean(wQ,3),mean(wU,3),mean(wV,3));
         Smap_rep1(:,:,:,iY) = cat(3,wQ(:,:,1),wU(:,:,1),wV(:,:,1));
-        if ~params.processing.hasSeg, strOAC = calOAC(strLin); topLines(:,iY)=surf_seg(strOAC,0.25)+2; end
+
+        if ~params.processing.hasSeg
+            strOAC = calOAC(strLin); 
+            topLines(:,iY)=surf_seg(strOAC,0.25)+2; 
+        end
         
         %% drLA and drPhR
         dopu_splitSpec_M = squeeze(mean(dopu_ss,3)); %% dopu across the different repeat(nR)
@@ -348,7 +352,9 @@ for nr = nR
         writematrix([strLrg strUrg],[foutputdir,name,'_1-1_StrucRg.txt']);
         dicomwrite(uint8(255*(Smap_rep1/2+0.5)),[foutputdir,name,'_1-3_1rep-Stokes.dcm']);
         dicomwrite(uint8(255*(Smap_avg/2+0.5)),[foutputdir,name,'_1-3_4rep-Stokes.dcm']);
-        dicomwrite(uint8(255*(permute(dopu_splitSpectrum,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
+        % 应用表面分割处理DOPU：只保留表面以下区域
+        dopu_surface_masked = apply_surface_mask_to_dopu(dopu_splitSpectrum, topLines);
+        dicomwrite(uint8(255*(permute(dopu_surface_masked,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
         
         
         if ~params.processing.hasSeg
@@ -1106,4 +1112,42 @@ if params.dopu.create_overlay && nargin >= 3 && ~isempty(struct_data)
 end
 
 fprintf('DOPU增强处理完成\n');
+end
+
+%% ====================================================================================
+% 函数名: apply_surface_mask_to_dopu
+% 功能: 基于表面分割结果对DOPU数据进行遮罩处理，只保留表面以下区域
+% 输入参数:
+%   dopu_data - 原始DOPU数据 [nZ×nX×nY]，nZ:深度, nX:A-line数量, nY:B-scan数量
+%   topLines - 表面位置矩阵 [nX×nY]，每列表示对应A-line的表面深度位置
+% 输出参数:
+%   masked_dopu - 遮罩后的DOPU数据 [nZ×nX×nY]，表面以上的区域为0
+% ====================================================================================
+function masked_dopu = apply_surface_mask_to_dopu(dopu_data, topLines)
+% 获取数据维度
+[nZ, nX, nY] = size(dopu_data);
+
+% 初始化输出矩阵
+masked_dopu = zeros(nZ, nX, nY);
+
+% 对每个B-scan进行处理
+for iY = 1:nY
+    % 对每个A-line进行处理
+    for iX = 1:nX
+        % 获取当前A-line的表面位置
+        surface_pos = round(topLines(iX, iY));
+        
+        % 确保表面位置在有效范围内
+        if surface_pos < 1
+            surface_pos = 1;
+        elseif surface_pos > nZ
+            surface_pos = nZ;
+        end
+        
+        % 只保留表面以下的DOPU值，表面以上的设置为0
+        if surface_pos < nZ
+            masked_dopu(surface_pos:end, iX, iY) = dopu_data(surface_pos:end, iX, iY);
+        end
+    end
+end
 end

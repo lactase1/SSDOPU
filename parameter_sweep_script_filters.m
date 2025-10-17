@@ -1,13 +1,13 @@
 %% ========================================================================
-% 脚本名: parameter_sweep_script.m
-% 功能: 自动修改参数并运行PS-OCT处理脚本，测试不同参数组合的效果
+% 脚本名: parameter_sweep_script_filters.m
+% 功能: 自动修改滤波参数并运行PS-OCT处理脚本，测试不同参数组合的效果
 % 作者: GitHub Copilot
-% 日期: 2025年9月19日
+% 日期: 2025年9月22日
 % 说明: 
-%   1. 直接修改 config_params.m 文件中的参数值（最简单有效的方法）
+%   1. 直接修改 config_params.m 文件中的滤波参数值
 %   2. 修改主处理脚本中的输出路径为 ssdopu+参数
 %   3. 运行主处理脚本 rPSOCT_06_splitSpec_3_3D_without_mat_wyx.m
-%   4. 重复以上步骤100次，测试100组不同参数
+%   4. 重复以上步骤，测试不同参数组合
 % ========================================================================
 
 clc; clear; close all;
@@ -15,7 +15,7 @@ clc; clear; close all;
 %% 文件路径设置
 config_file = 'D:\1-Liu Jian\yongxin.wang\SSDOPU\function\config_params.m';
 main_script = 'D:\1-Liu Jian\yongxin.wang\SSDOPU\rPSOCT_06_splitSpec_3_3D_without_mat_wyx.m';
-data_path = '/d/1-Liu Jian/yongxin.wang/nail';
+data_path = 'D:\1-Liu Jian\yongxin.wang\nail';
 output_root = 'D:\1-Liu Jian\yongxin.wang\Output';
 
 %% 预运行检查
@@ -60,15 +60,14 @@ end
 fprintf('预运行检查完成！\n\n');
 
 %% 参数设置
-% 定义100组不同的滤波核参数组合
-% 重要约束：kRU_cfg1 必须为奇数！
-% 从 4,9 开始，围绕 5,11 进行全面参数扫描
+% 定义滤波参数组合
+% h1_size: 高斯核尺寸 [h w]
+% h1_sigma: 高斯核标准差
 param_combinations = [
-    %% 刘老师要求参数
-    % 3 21;
-    % 5 21;
-    % 7 21;
-    9 21;
+    % h1_size_h h1_size_w h1_sigma
+    % 5 5 3;
+    % 7 7 4; 
+    9 9 5;
 ];
 
 fprintf('开始参数扫描...\n');
@@ -87,13 +86,14 @@ total_start_time = tic;
 
 for param_idx = 1:size(param_combinations, 1)
     % 获取当前参数组合
-    kRL = param_combinations(param_idx, 1);
-    kRU = param_combinations(param_idx, 2);
-    param_name = sprintf('ssdopu-kRL_%02d-kRU_%02d', kRL, kRU);
+    h1_h = param_combinations(param_idx, 1);
+    h1_w = param_combinations(param_idx, 2);
+    h1_sigma = param_combinations(param_idx, 3);
+    param_name = sprintf('ssdopu-h1_%dx%d-sigma_%d', h1_h, h1_w, h1_sigma);
     
     fprintf('\n========================================\n');
     fprintf('开始测试参数组合 %d/%d: %s\n', param_idx, size(param_combinations, 1), param_name);
-    fprintf('kRL_cfg1=%d, kRU_cfg1=%d\n', kRL, kRU);
+    fprintf('h1_size=[%d %d], h1_sigma=%d\n', h1_h, h1_w, h1_sigma);
     fprintf('========================================\n');
     
     try
@@ -106,7 +106,7 @@ for param_idx = 1:size(param_combinations, 1)
         
         % 步骤1: 修改配置文件中的参数
         fprintf('1. 修改配置文件参数...\n');
-        modify_config_params(config_file, kRL, kRU);
+        modify_config_params(config_file, [h1_h h1_w], h1_sigma);
         
         % 步骤2: 修改主脚本中的输出路径
         fprintf('2. 修改输出路径...\n');
@@ -148,28 +148,28 @@ fprintf('=======================================\n');
 
 % 生成结果比较指南
 fprintf('\n结果比较建议:\n');
-fprintf('1. 检查各个 ssdopu-kRL_xx-kRU_xx 文件夹中的处理结果\n');
+fprintf('1. 检查各个 ssdopu-h1_xx-sigma_xx 文件夹中的处理结果\n');
 fprintf('2. 重点查看 DOPU 图像 (_1-4_dopu_SS.dcm) 的质量\n');
 fprintf('3. 比较结构图像 (_1-1_Struc.dcm) 的清晰度\n');
 fprintf('4. 选择视觉效果最佳的参数组合\n');
 
 %% ========================================================================
 % 函数名: modify_config_params
-% 功能: 直接修改 config_params.m 文件中的参数值
+% 功能: 直接修改 config_params.m 文件中的滤波参数值
 % ========================================================================
-function modify_config_params(config_file, kRL_cfg1, kRU_cfg1)
+function modify_config_params(config_file, h1_size, h1_sigma)
     % 读取文件内容
     content = fileread(config_file);
     
     % 使用正则表达式替换参数值
-    % 替换 kRL_cfg1 参数
-    pattern1 = 'params\.polarization\.kRL_cfg1\s*=\s*\d+\s*;';
-    replacement1 = sprintf('params.polarization.kRL_cfg1 = %d;', kRL_cfg1);
+    % 替换 h1_size 参数
+    pattern1 = 'params\.filters\.h1_size\s*=\s*\[\s*\d+\s+\d+\s*\]\s*;';
+    replacement1 = sprintf('params.filters.h1_size = [%d %d];', h1_size(1), h1_size(2));
     content = regexprep(content, pattern1, replacement1);
     
-    % 替换 kRU_cfg1 参数
-    pattern2 = 'params\.polarization\.kRU_cfg1\s*=\s*\d+\s*;';
-    replacement2 = sprintf('params.polarization.kRU_cfg1 = %d;', kRU_cfg1);
+    % 替换 h1_sigma 参数
+    pattern2 = 'params\.filters\.h1_sigma\s*=\s*\d+\s*;';
+    replacement2 = sprintf('params.filters.h1_sigma = %d;', h1_sigma);
     content = regexprep(content, pattern2, replacement2);
     
     % 写回文件
@@ -181,31 +181,32 @@ function modify_config_params(config_file, kRL_cfg1, kRU_cfg1)
     fclose(fid);
     
     % 验证修改是否成功
-    validate_config_modification(config_file, kRL_cfg1, kRU_cfg1);
+    validate_config_modification(config_file, h1_size, h1_sigma);
     
-    fprintf('  更新配置文件: kRL_cfg1=%d, kRU_cfg1=%d\n', kRL_cfg1, kRU_cfg1);
+    fprintf('  更新配置文件: h1_size=[%d %d], h1_sigma=%d\n', h1_size(1), h1_size(2), h1_sigma);
 end
 
 %% ========================================================================
 % 函数名: validate_config_modification
 % 功能: 验证配置文件参数修改是否成功
 % ========================================================================
-function validate_config_modification(config_file, expected_kRL, expected_kRU)
+function validate_config_modification(config_file, expected_h1_size, expected_h1_sigma)
     try
         % 读取修改后的文件内容
         content = fileread(config_file);
         
         % 提取实际的参数值
-        kRL_match = regexp(content, 'params\.polarization\.kRL_cfg1\s*=\s*(\d+)', 'tokens');
-        kRU_match = regexp(content, 'params\.polarization\.kRU_cfg1\s*=\s*(\d+)', 'tokens');
+        h1_size_match = regexp(content, 'params\.filters\.h1_size\s*=\s*\[\s*(\d+)\s+(\d+)\s*\]', 'tokens');
+        h1_sigma_match = regexp(content, 'params\.filters\.h1_sigma\s*=\s*(\d+)', 'tokens');
         
-        if ~isempty(kRL_match) && ~isempty(kRU_match)
-            actual_kRL = str2double(kRL_match{1}{1});
-            actual_kRU = str2double(kRU_match{1}{1});
+        if ~isempty(h1_size_match) && ~isempty(h1_sigma_match)
+            actual_h1_h = str2double(h1_size_match{1}{1});
+            actual_h1_w = str2double(h1_size_match{1}{2});
+            actual_h1_sigma = str2double(h1_sigma_match{1}{1});
             
-            if actual_kRL ~= expected_kRL || actual_kRU ~= expected_kRU
-                error('参数修改验证失败: 预期 kRL=%d, kRU=%d, 实际 kRL=%d, kRU=%d', ...
-                    expected_kRL, expected_kRU, actual_kRL, actual_kRU);
+            if actual_h1_h ~= expected_h1_size(1) || actual_h1_w ~= expected_h1_size(2) || actual_h1_sigma ~= expected_h1_sigma
+                error('参数修改验证失败: 预期 h1_size=[%d %d], h1_sigma=%d, 实际 h1_size=[%d %d], h1_sigma=%d', ...
+                    expected_h1_size(1), expected_h1_size(2), expected_h1_sigma, actual_h1_h, actual_h1_w, actual_h1_sigma);
             end
         else
             error('无法在配置文件中找到参数');
@@ -222,36 +223,36 @@ end
 function modify_output_path(main_script, param_name)
     % 读取文件内容
     content = fileread(main_script);
-    
+
     % 标准化路径处理 - 移除末尾的反斜杠以避免fullfile重复
     base_path = 'D:\1-Liu Jian\yongxin.wang\Output';
     new_path = fullfile(base_path, param_name);
-    
+
     % 直接查找和替换当前已知的output_base行
     old_line = "output_base = 'D:\1-Liu Jian\yongxin.wang\Output';";
     new_line = sprintf("output_base = '%s';", new_path);
-    
+
     % 执行替换
     new_content = strrep(content, old_line, new_line);
-    
+
     % 如果没有找到匹配，尝试其他可能的格式
     if strcmp(content, new_content)
         fprintf('  尝试其他格式...\n');
-        
+
         % 尝试没有反斜杠的格式（如果文件中有错误格式）
         old_line2 = "output_base = 'D:1-Liu Jianyongxin.wangOutput';";
         new_content = strrep(content, old_line2, new_line);
-        
+
         if strcmp(content, new_content)
             error('无法找到可替换的output_base行，请手动检查主脚本');
         end
     end
-    
+
     % 验证修改是否成功
     if ~contains(new_content, new_path)
         error('路径替换验证失败：新内容不包含期望路径 %s', new_path);
     end
-    
+
     % 写回文件
     fid = fopen(main_script, 'w');
     if fid == -1
@@ -259,6 +260,6 @@ function modify_output_path(main_script, param_name)
     end
     fwrite(fid, new_content, 'char');
     fclose(fid);
-    
+
     fprintf('  更新输出路径: %s\n', new_path);
 end
