@@ -28,7 +28,7 @@ params.processing.do_reg = 0;                  % 是否进行帧间配准(运动
 params.processing.useref = 1;                  % 参考信号模式 (1:使用前50k A-line, 0:使用背景, -1:不使用)
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
-params.processing.hasSeg = 0;                  % 是否已有分割结果(.mat文件)
+params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
 params.range.setZrg = 0;
 
 %% ========== 并行处理设置 ==========
@@ -40,12 +40,16 @@ params.mode.do_cfg1 = 1;                       % 是否启用配置1
 % 配置2: 相位延迟分析 (Phase Retardation calculation) 
 params.mode.do_cfg2 = 0;                       % 是否启用配置2
 % 滤波模式
-params.mode.wovWinF = 1;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
+params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
 params.dopu.do_avg = 1;                        % 是否使用平均方法 (1:启用, 0:禁用)
 params.dopu.do_eig = 0;                        % 是否使用特征值方法 (1:启用, 0:禁用)
+% 分裂谱模式: 'overlap9' (默认，9 段半重叠) 或 'nonoverlap5' (5 段无重叠)
+params.dopu.ss_mode = 'overlap9';
+% 窗口 Tukey alpha（可由 nonoverlap5 函数使用）
+params.dopu.win_alpha = 0.25;
 
 %% ========== 偏振分析参数 ==========
 % 【优化说明】基于PS-OCT技术特性调整偏振分析参数：

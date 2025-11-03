@@ -18,9 +18,12 @@ if exist(function_path, 'dir')
     addpath(function_path);
 end
 
+%% ====================================================================================
+% load_topLines_mat is implemented as a separate function file under function/load_topLines_mat.m
+
 % 设置数据路径
-data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT\tmp\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
+data_path   = 'D:\1-Liu Jian\yongxin.wang\tmp';
+output_base = 'D:\1-Liu Jian\yongxin.wang\overlap9';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -84,7 +87,7 @@ input_file_path = varargin{1};
 if nargin >= 2
     output_base = varargin{2};
 else
-    output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
+    output_base = 'D:\1-Liu Jian\yongxin.wang\DOPU_output\';
 end
 
 % 检查输入文件是否存在
@@ -104,7 +107,7 @@ file_start_time = tic;
 
 % 启动并行池
 if isempty(gcp('nocreate'))
-    parpool('local', 48);  
+    parpool('local', 44);  
 end
 
 params = config_params();
@@ -202,10 +205,77 @@ for nr = nR
     
     czrg = 1:320;% set z range
     topLines = ones(nX,nY);
-    % if params.processing.hasSeg
-    %     load([name, '.mat']);
-    %     topLines = round(topLines);topLines(topLines<=1) = 1;
-    % end
+    % 支持从外部.mat文件直接加载已标注的topLines
+    % 如果 params.processing.useMatSeg == true，则优先使用 params.processing.matSegFile
+    if isfield(params.processing,'useMatSeg') && params.processing.useMatSeg
+        % 允许用户传入路径，否则按常见命名约定查找 .mat 文件
+        if isfield(params.processing,'matSegFile') && ~isempty(params.processing.matSegFile)
+            mat_file_to_load = params.processing.matSegFile;
+        else
+            folder = fileparts(filename);
+            candidate1 = fullfile(folder, [name, '.mat']);            % e.g. 2024...mat
+            candidate2 = fullfile(folder, [name, '.oct.mat']);        % e.g. 2024....oct.mat
+            if exist(candidate1,'file')
+                mat_file_to_load = candidate1;
+            elseif exist(candidate2,'file')
+                mat_file_to_load = candidate2;
+            else
+                % 尝试通配符匹配相同前缀的 .mat 文件（如 name*.mat）
+                D = dir(fullfile(folder, [name, '*.mat']));
+                if ~isempty(D)
+                    mat_file_to_load = fullfile(folder, D(1).name);
+                else
+                    % 默认回退到 name.mat（将触发后续的错误处理）
+                    mat_file_to_load = candidate1;
+                end
+            end
+        end
+        try
+            topLines = load_topLines_mat(mat_file_to_load, nX, nY, numel(czrg));
+            fprintf('使用 %s 作为 topLines\n', mat_file_to_load);
+        catch ME
+            if exist('ME','var') && isfield(ME,'identifier') && ~isempty(ME.identifier)
+                warning(ME.identifier, '加载 topLines 失败，回退到自动/默认初始化: %s', ME.message);
+            elseif exist('ME','var')
+                % 使用通用警告信息，不直接传递 MException 对象属性到 warning
+                warning('加载 topLines 时发生错误，回退到默认初始化。');
+            else
+                warning('加载 topLines 失败，回退到自动/默认初始化');
+            end
+            topLines = ones(nX,nY);
+        end
+    else
+        if params.processing.hasSeg
+            % 当 hasSeg 为 true 时，尝试多种命名约定来查找 mat 文件（兼容 name.oct.mat）
+            folder = fileparts(filename);
+            candidate1 = fullfile(folder, [name, '.mat']);
+            candidate2 = fullfile(folder, [name, '.oct.mat']);
+            if exist(candidate1,'file')
+                mat_to_load = candidate1;
+            elseif exist(candidate2,'file')
+                mat_to_load = candidate2;
+            else
+                D = dir(fullfile(folder, [name, '*.mat']));
+                if ~isempty(D)
+                    mat_to_load = fullfile(folder, D(1).name);
+                else
+                    error('未找到分割 .mat 文件: %s 或 %s', candidate1, candidate2);
+                end
+            end
+            tmp = load(mat_to_load);
+            % 尝试常见变量名
+            if isfield(tmp,'topLines')
+                topLines = tmp.topLines;
+            elseif isfield(tmp,'TopLines')
+                topLines = tmp.TopLines;
+            else
+                % 退化：使用第一个变量（可能是保存时未命名为 topLines）
+                fn = fieldnames(tmp);
+                topLines = tmp.(fn{1});
+            end
+            topLines = round(topLines); topLines(topLines<=1) = 1;
+        end
+    end
     if params.range.setZrg
         czrg = czrg(1:round(params.range.setZrg));
     end
@@ -251,38 +321,23 @@ for nr = nR
             Bd1=Bs1;
             Bd2=Bs2;
         end
-        %% split spectrum
-        if ~params.dopu.do_ssdopu % if not do adaptive gaussian filter dopu_ss =1
-            dopu_ss = 1;
+        %% split spectrum DOPU calculation
+        % 只有在 params.dopu.do_ssdopu 为真时才进行分裂谱计算，否则使用默认占位
+        if isfield(params,'dopu') && isfield(params.dopu,'do_ssdopu') && params.dopu.do_ssdopu
+            % 根据 params.dopu.ss_mode 选择分裂谱实现：'overlap9'(默认) 或 'nonoverlap5'
+            if isfield(params.dopu,'ss_mode') && strcmpi(string(params.dopu.ss_mode),'nonoverlap5')
+                % 使用不重叠的5段实现
+                [dopu_splitSpectrum(:,:,iY), dopu_ss] = calculateSplitSpectrumDOPU_nonoverlap5(...
+                    Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+            else
+                % 兼容默认行为：9 段且半重叠
+                [dopu_splitSpectrum(:,:,iY), dopu_ss] = calculateSplitSpectrumDOPU(...
+                    Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+            end
         else
-            % creat array to store split-spectrum complex (FFT): Z*X*nR*nWin
-            Bimg1 = zeros(SPL,nX,nr,nWin);
-            Bimg2 = Bimg1;
-            S0 = zeros(nZcrop,nX,nr,nWin); 
-            S1 = S0;
-            S2 = S0;
-            S3 = S0;
-            for iR = 1:nr
-                for iL=1:nWin
-                    % extract data fragments from two different channel and
-                    % apply a giassian filter before performing FFT
-                    iBd1=Bd1(windex(iL):windex(iL)+winL-1,:,iR).*winG;
-                    iBd2=Bd2(windex(iL):windex(iL)+winL-1,:,iR).*winG;
-                    Bimg1(:,:,iR,iL)=fft(iBd1,SPL,1);
-                    Bimg2(:,:,iR,iL)=fft(iBd2,SPL,1);
-                end
-            end
-            IMGs_ch1=Bimg1(czrg,:,:,:);IMGs_ch2=Bimg2(czrg,:,:,:);
-            % calculate the QUV from the two-channel complex
-            for iR = 1:nr
-                for iL = 1: nWin
-                    [S0(:,:,iR,iL),S1(:,:,iR,iL),S2(:,:,iR,iL),S3(:,:,iR,iL)] = ...
-                        cumulativeQUV(IMGs_ch1(:,:,iR,iL),IMGs_ch2(:,:,iR,iL));
-                end
-            end
-            % average QUV accross split-spectrum and calculate dopu
-            dopu_ss = sqrt(mean(S1./S0,4).^2+mean(S2./S0,4).^2+mean(S3./S0,4).^2);%% ===>nZcrop,nX,nr
-            dopu_splitSpectrum(:,:,iY) = mean(dopu_ss,3);
+            % 未启用分裂谱时，返回占位值以保持后续管线兼容
+            dopu_splitSpectrum(:,:,iY) = ones(numel(czrg), nX);
+            dopu_ss = ones(numel(czrg), nX, nr);
         end
         %% whole spectrum nZ*nX*nR==> fft(complex)
         Bimg1_wholeStr=fft(Bd1.*winG_whole,SPL,1);Bimg2_wholeStr=fft(Bd2.*winG_whole,SPL,1);
@@ -348,7 +403,9 @@ for nr = nR
         writematrix([strLrg strUrg],[foutputdir,name,'_1-1_StrucRg.txt']);
         dicomwrite(uint8(255*(Smap_rep1/2+0.5)),[foutputdir,name,'_1-3_1rep-Stokes.dcm']);
         dicomwrite(uint8(255*(Smap_avg/2+0.5)),[foutputdir,name,'_1-3_4rep-Stokes.dcm']);
-        dicomwrite(uint8(255*(permute(dopu_splitSpectrum,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
+        % 应用表面分割处理DOPU：只保留表面以下区域
+        dopu_surface_masked = apply_surface_mask_to_dopu(dopu_splitSpectrum, topLines);
+        dicomwrite(uint8(255*(permute(dopu_surface_masked,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
         
         
         if ~params.processing.hasSeg
@@ -377,10 +434,19 @@ for nr = nR
                 dicomwrite(PRRc,[foutputdir,name,'_2-5_PhR-cfg1-',num2str(nr),'repAvg.dcm']);
                 
                 dicomwrite(uint8(255*(cumLA_Ms_cfg1_rmBG/2+0.5)),[foutputdir,name,'_2-6_cumLA_rmBG-cfg1-',num2str(nr),'repAvg.dcm']);
-                dicomwrite(uint8(255*cumLA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2-7_cumLA_rmBG-cfg1-',num2str(nr),'repAvg_hsvColoring.dcm']);
+                dicomwrite(uint8(255*cumLA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2
                 dicomwrite(uint8(255*(LA_Ms_cfg1_rmBG/2+0.5)),[foutputdir,name,'_2-8_drLA_rmBG-cfg1-',num2str(nr),'repAvg.dcm']);
                 dicomwrite(uint8(255*LA_Ms_cfg1_rmBG_hsv),[foutputdir,name,'_2-9_drLA_rmBG-cfg1-',num2str(nr),'repAvg_hsvColoring.dcm']);
                 dicomwrite(PRRc_rmBG,[foutputdir,name,'_2-10_PhR_rmBG-cfg1-',num2str(nr),'repAvg.dcm']);
+                
+                % 应用 DOPU 掩膜优化：用 DOPU 阈值筛选光轴角和相位延迟图
+                [LA_filtered, PhR_filtered, dopu_mask] = apply_dopu_mask(dopu_splitSpec_M, LA_c_cfg1_avg, PhR_c_cfg1_avg, 'auto', true);
+                
+                % 保存筛选后的结果
+                dicomwrite(uint8(255*(LA_filtered/2+0.5)),[foutputdir,name,'_2-11_drLA_filtered-cfg1-',num2str(nr),'repAvg.dcm']);
+                dicomwrite(uint8(255*(PhR_filtered/2+0.5)),[foutputdir,name,'_2-12_PhR_filtered-cfg1-',num2str(nr),'repAvg.dcm']);
+                dicomwrite(uint8(255*dopu_mask),[foutputdir,name,'_2-13_DOPU_mask-cfg1-',num2str(nr),'repAvg.dcm']);
+                
             end
             if params.dopu.do_eig
                 for iY =1:nY
@@ -1106,4 +1172,128 @@ if params.dopu.create_overlay && nargin >= 3 && ~isempty(struct_data)
 end
 
 fprintf('DOPU增强处理完成\n');
+end
+
+%% ====================================================================================
+% 函数名: apply_surface_mask_to_dopu
+% 功能: 基于表面分割结果对DOPU数据进行遮罩处理，只保留表面以下区域
+% 输入参数:
+%   dopu_data - 原始DOPU数据 [nZ×nX×nY]，nZ:深度, nX:A-line数量, nY:B-scan数量
+%   topLines - 表面位置矩阵 [nX×nY]，每列表示对应A-line的表面深度位置
+% 输出参数:
+%   masked_dopu - 遮罩后的DOPU数据 [nZ×nX×nY]，表面以上的区域为0
+% ====================================================================================
+function masked_dopu = apply_surface_mask_to_dopu(dopu_data, topLines)
+% 获取数据维度
+[nZ, nX, nY] = size(dopu_data);
+
+% 初始化输出矩阵
+masked_dopu = zeros(nZ, nX, nY);
+
+% 对每个B-scan进行处理
+for iY = 1:nY
+    % 对每个A-line进行处理
+    for iX = 1:nX
+        % 获取当前A-line的表面位置
+        surface_pos = round(topLines(iX, iY));
+        
+        % 确保表面位置在有效范围内
+        if surface_pos < 1
+            surface_pos = 1;
+        elseif surface_pos > nZ
+            surface_pos = nZ;
+        end
+        
+        % 只保留表面以下的DOPU值，表面以上的设置为0
+        if surface_pos < nZ
+            masked_dopu(surface_pos:end, iX, iY) = dopu_data(surface_pos:end, iX, iY);
+        end
+    end
+end
+end
+
+%% ====================================================================================
+% 函数名: segment_surface_gradient_dp
+% 功能: 多尺度梯度+动态规划的OCT表面分割，增强平滑与鲁棒性
+% 输入参数:
+%   img - OCT结构图像 [Z×X]
+% 输出参数:
+%   surface_line - 每个A-line的平滑表面位置 [1×X]
+% 算法流程:
+%   1. 多尺度高斯滤波与结构增强，抑制噪声
+%   2. 计算多尺度垂直梯度作为代价函数
+%   3. 动态规划在梯度图上寻找能量最小的连续路径
+%   4. 多阶段平滑(中值 + Savitzky-Golay + 三次样条)
+% 优点:
+%   - 直接利用梯度，避免阈值敏感问题
+%   - 动态规划确保轮廓连续
+%   - 多级平滑消除锯齿
+% ====================================================================================
+function surface_line = segment_surface_gradient_dp(img)
+    img_norm = mat2gray(img);
+    img_low = imgaussfilt(img_norm, 1.0);
+    img_high = imgaussfilt(img_norm, 3.0);
+    img_enhanced = 0.6*img_low + 0.4*img_high;
+
+    % 计算多尺度梯度
+    [gY1,~] = imgradientxy(img_enhanced, 'sobel');
+    gY2 = imfilter(img_enhanced, fspecial('prewitt')');
+    grad_mag = abs(gY1) + 0.5*abs(gY2);
+
+    % 构建代价: 负梯度 + 平滑约束项
+    grad_norm = mat2gray(grad_mag);
+    cost = 1 - grad_norm; % 梯度大 → 代价低
+    cost = imgaussfilt(cost, [1.5, 0.5]);
+
+    smoothPenalty = 0.15;
+    span = 3;
+    surface_line = dp_find_path(cost, smoothPenalty, span);
+
+    % 中值滤波
+    win = min(9, numel(surface_line));
+    if mod(win,2)==0, win = win-1; end
+    win = max(win, 3);
+    surface_line = medfilt1(surface_line, win);
+
+    % Savitzky-Golay平滑
+    sg_win = min(19, numel(surface_line));
+    if mod(sg_win,2)==0, sg_win = sg_win-1; end
+    sg_win = max(sg_win, 5);
+    sg_order = min(3, (sg_win-1)/2);
+    surface_line = sgolayfilt(surface_line, sg_order, sg_win);
+
+    % 三次样条拟合平滑
+    x = 1:numel(surface_line);
+    pp = csaps(x, surface_line, 0.9);
+    surface_line = fnval(pp, x);
+
+    % 限制索引
+    surface_line = round(surface_line);
+    surface_line = max(surface_line, 1);
+    surface_line = min(surface_line, size(img,1));
+end
+
+function surface_line = dp_find_path(cost, lambda, span)
+    [nZ, nX] = size(cost);
+    dp = inf(nZ, nX);
+    path = zeros(nZ, nX, 'uint16');
+    dp(:,1) = cost(:,1);
+
+    for x = 2:nX
+        for z = 1:nZ
+            z1 = max(1, z-span);
+            z2 = min(nZ, z+span);
+            prev = dp(z1:z2, x-1);
+            penalties = lambda * (abs((z1:z2)'-z).^2);
+            [val, idx] = min(prev + penalties);
+            dp(z,x) = cost(z,x) + val;
+            path(z,x) = uint16(z1 + idx - 1);
+        end
+    end
+
+    surface_line = zeros(1, nX);
+    [~, surface_line(nX)] = min(dp(:,nX));
+    for x = nX-1:-1:1
+        surface_line(x) = path(surface_line(x+1), x+1);
+    end
 end
