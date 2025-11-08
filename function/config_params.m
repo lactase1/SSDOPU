@@ -34,19 +34,16 @@ params.range.setZrg = 0;
 
 %% ========== 并行处理设置 ==========
 params.parallel.LocalUseMpiexec = false;       % 并行处理MPI设置
+% 可选：限制并行池最大 worker 数 (0 表示由代码自动选择)
+params.parallel.maxWorkers = 0;
 
 %% ========== 处理模式配置 ==========
-% 配置1: 标准双折射分析 (LA calculation)
-params.mode.do_cfg1 = 1;                       % 是否启用配置1
-% 配置2: 相位延迟分析 (Phase Retardation calculation) 
-params.mode.do_cfg2 = 0;                       % 是否启用配置2
-% 滤波模式
+% 处理模式配置（当前仅保留滤波模式选项）
 params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
-params.dopu.do_avg = 1;                        % 是否使用平均方法 (1:启用, 0:禁用)
-params.dopu.do_eig = 0;                        % 是否使用特征值方法 (1:启用, 0:禁用)
+% 当前只使用平均方法(avg)路径，已移除对 eig 路径的支持
 % 分裂谱模式: 'overlap9' (默认，9 段半重叠) 或 'nonoverlap5' (5 段无重叠)
 params.dopu.ss_mode = 'overlap9';
 % 窗口 Tukey alpha（可由 nonoverlap5 函数使用）
@@ -67,10 +64,7 @@ params.polarization.Avnum = 4;                 % DDG测试用平均层数(统一
 params.polarization.kRL_cfg1 = 3;              % 配置1滤波核下限(减小以保持细节)
 params.polarization.kRU_cfg1 = 21;              % 配置1滤波核上限(适当增加覆盖范围)
 
-% 配置2滤波核范围 (用于相位延迟PhR计算)
-% 相位延迟测量需要更大的统计区域以提高精度  
-params.polarization.kRL_cfg2 = 2;              % 配置2滤波核下限(微调下限)
-params.polarization.kRU_cfg2 = 15;             % 配置2滤波核上限(减小以平衡精度与分辨率)
+% （已移除配置2相关参数，当前仅使用配置1的滤波范围）
 
 %% ========== 高斯滤波核设置 ==========
 % 【优化说明】基于PS-OCT巩膜检测技术需求的参数调整：
@@ -89,18 +83,7 @@ params.filters.h2_size = [15 15];              % 高斯核2尺寸 (适当增大�
 params.filters.h2_sigma = 6.0;                 % 高斯核2标准差 (提高以更好平滑背景)
 params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
 
-% %% ========== 数据处理范围设置 ==========
-% % 【优化说明】根据眼部结构和巩膜位置特点调整处理范围
-% % 注意: 实际范围将根据数据文件的SPL自动调整，确保不超过SPL/2
-% params.range.czrg_start = 15;                  % Z方向处理起始位置(略提前以包含更多巩膜信息)
-% params.range.czrg_end = 280;                   % Z方向处理结束位置(保守设置，避免超出数据范围)
-% params.range.setZrg = 0;                       % 深度范围限制(0:处理全部深度以获得完整巩膜信息)
-% params.range.Thr = 150;                        % OCT信号阈值(略降低以包含更多弱信号区域)
-
-% %% ========== 分光谱DOPU窗口设置 ==========
-% % 【优化说明】调整分光谱参数以优化巩膜检测性能
-% params.splitspec.nWin = 11;                    % 分光谱窗口数量(增加以提高频谱分辨率)
-% params.splitspec.tukey_alpha = 0.15;           % Tukey窗口参数(减小以减少频谱泄漏)
+% （已删除若干未使用的注释/备用参数，以保持配置简洁）
 
 %% ========== 表面检测参数 ==========
 % 【优化说明】针对眼部结构特点调整表面检测参数  
@@ -115,9 +98,7 @@ if params.polarization.kRL_cfg1 >= params.polarization.kRU_cfg1
     warning('配置1滤波核范围设置有误: kRL_cfg1应小于kRU_cfg1');
 end
 
-if params.polarization.kRL_cfg2 >= params.polarization.kRU_cfg2
-    warning('配置2滤波核范围设置有误: kRL_cfg2应小于kRU_cfg2');
-end
+% （配置2 已弃用，相关检查移除）
 
 % % 检查处理范围参数
 % if params.range.czrg_start >= params.range.czrg_end
@@ -138,16 +119,11 @@ end
 if nargout == 0
     % 如果直接调用函数不接收输出，则显示参数摘要
     fprintf('\n=== PS-OCT处理参数配置摘要 ===\n');
-    fprintf('TIFF生成: %s (帧数: %d)\n', ...
-        iif(params.tiff.make_tiff, '启用', '禁用'), params.tiff.tiff_frame);
+    fprintf('TIFF生成: %s (帧: %d)\n', iif(params.tiff.make_tiff, '启用', '禁用'), params.tiff.tiff_frame);
     fprintf('DICOM保存: %s\n', iif(params.tiff.saveDicom, '启用', '禁用'));
-    fprintf('分光谱DOPU: %s\n', iif(params.dopu.do_ssdopu, '启用', '禁用'));
-    fprintf('DOPU增强处理: %s (噪声阈值: %.2f, 对比度因子: %.2f)\n', ...
-        iif(params.dopu.enable_enhanced, '启用', '禁用'), params.dopu.noise_threshold, params.dopu.contrast_enhance);
-    fprintf('DOPU结构叠加: %s\n', iif(params.dopu.create_overlay, '启用', '禁用'));
-    fprintf('配置1(LA): %s, 配置2(PhR): %s\n', ...
-        iif(params.mode.do_cfg1, '启用', '禁用'), iif(params.mode.do_cfg2, '启用', '禁用'));
+    fprintf('分光谱DOPU: %s (模式: %s)\n', iif(params.dopu.do_ssdopu, '启用', '禁用'), params.dopu.ss_mode);
+    fprintf('DOPU计算方法: avg (固定)\n');
     fprintf('滤波模式: %s\n', iif(params.mode.wovWinF, '固定高斯', '自适应DOPU'));
-    fprintf('平均层数: %d\n', params.polarization.Avnum);
+    fprintf('平均层数 (Avnum): %d\n', params.polarization.Avnum);
     fprintf('==========================\n\n');
 end
