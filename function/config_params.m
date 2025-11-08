@@ -35,7 +35,7 @@ params.range.setZrg = 0;
 %% ========== 并行处理设置 ==========
 params.parallel.LocalUseMpiexec = false;       % 并行处理MPI设置
 % 可选：限制并行池最大 worker 数 (0 表示由代码自动选择)
-params.parallel.maxWorkers = 0;
+params.parallel.maxWorkers = 48;
 
 %% ========== 处理模式配置 ==========
 % 处理模式配置（当前仅保留滤波模式选项）

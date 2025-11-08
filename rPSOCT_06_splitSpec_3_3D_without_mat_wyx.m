@@ -289,39 +289,8 @@ function rPSOCT_process_single_file(varargin)
                 Bd2 = Bs2;
             end
         %% split spectrum
-        if ~params.dopu.do_ssdopu % if not do adaptive gaussian filter dopu_ss =1
-            dopu_ss = 1;
-        else
-            % creat array to store split-spectrum complex (FFT): Z*X*nR*nWin
-            Bimg1 = zeros(SPL,nX,nr,nWin);
-            Bimg2 = Bimg1;
-            S0 = zeros(nZcrop,nX,nr,nWin); 
-            S1 = S0;
-            S2 = S0;
-            S3 = S0;
-            for iR = 1:nr
-                for iL = 1:nWin
-                    % extract data fragments from two different channel and
-                    % apply a giassian filter before performing FFT
-                    iBd1 = Bd1(windex(iL):windex(iL) + winL - 1, :, iR) .* winG;
-                    iBd2 = Bd2(windex(iL):windex(iL) + winL - 1, :, iR) .* winG;
-                    Bimg1(:, :, iR, iL) = fft(iBd1, SPL, 1);
-                    Bimg2(:, :, iR, iL) = fft(iBd2, SPL, 1);
-                end
-            end
-            IMGs_ch1 = Bimg1(czrg, :, :, :);
-            IMGs_ch2 = Bimg2(czrg, :, :, :);
-            % calculate the QUV from the two-channel complex
-            for iR = 1:nr
-                for iL = 1:nWin
-                    [S0(:, :, iR, iL), S1(:, :, iR, iL), S2(:, :, iR, iL), S3(:, :, iR, iL)] = ...
-                        cumulativeQUV(IMGs_ch1(:, :, iR, iL), IMGs_ch2(:, :, iR, iL));
-                end
-            end
-            % average QUV accross split-spectrum and calculate dopu
-            dopu_ss = sqrt(mean(S1 ./ S0, 4) .^ 2 + mean(S2 ./ S0, 4) .^ 2 + mean(S3 ./ S0, 4) .^ 2); %% ===>nZcrop,nX,nr
-            dopu_splitSpectrum(:, :, iY) = mean(dopu_ss, 3);
-        end
+        [dopu_splitSpectrum(:, :, iY), dopu_ss] = calculateSplitSpectrumDOPU(...
+            Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
         %% whole spectrum nZ*nX*nR==> fft(complex)
         Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
         Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
