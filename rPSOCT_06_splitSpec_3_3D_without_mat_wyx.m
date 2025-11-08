@@ -19,8 +19,8 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT\tmp\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
+data_path   = 'D:\1-Liu Jian\yongxin.wang\tmp\';
+output_base = 'D:\1-Liu Jian\yongxin.wang\tmp1';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -153,6 +153,12 @@ IMGheight=floor(Blength/2);
 kmat=linspace(-0.5,0.5,Blength)'.^2;
 phV=exp(1i.*(kmat.*disp_coef));
 nY=floor(nY/nR);
+% 添加帧数限制功能
+if params.processing.max_frames > 0
+    original_nY = nY;
+    nY = min(nY, params.processing.max_frames);
+    fprintf('帧数限制: %d -> %d (最大允许: %d)\n', original_nY, nY, params.processing.max_frames);
+end
 K=1:Blength;
 use_autoRg=1;
 RgFlow=[60 110];
@@ -203,7 +209,7 @@ for nr = nR
     czrg = 1:320;% set z range
     topLines = ones(nX,nY);
     if params.processing.hasSeg
-        matFilePath = [name, '.mat'];
+        matFilePath = fullfile(filepath, [name, '.mat']);
         if exist(matFilePath, 'file')
             try
                 load(matFilePath, 'topLines');
@@ -355,13 +361,42 @@ for nr = nR
             SS1=Strus(:,:,i);
             Struc(:,:,:,i)=(SS1-strLrg)./(strUrg-strLrg);
         end
-        [Struc_flat] = volFlatten(Struc,topLines);
+        % 保存原始结构图像
         dicomwrite(uint8(255*(Struc)),[foutputdir,name,'_1-1_Struc.dcm']);
-        dicomwrite(uint8(255*(Struc_flat)),[foutputdir,name,'_1-1_Struc_flat.dcm']);
+        
+        % 创建带边界的结构图像副本
+        Struc_with_boundary = Struc;
+        % 对Struc应用边界处理：边界以上的部分变成黑色
+        for iY = 1:size(Struc_with_boundary, 4)
+            for iX = 1:size(Struc_with_boundary, 2)
+                surface_pos = round(topLines(iX, iY));
+                if surface_pos > 1 && surface_pos <= size(Struc_with_boundary, 1)
+                    Struc_with_boundary(1:surface_pos-1, iX, :, iY) = 0;  % 边界以上的部分设为黑色
+                end
+            end
+        end
+        dicomwrite(uint8(255*(Struc_with_boundary)),[foutputdir,name,'_1-2_Struc_with_boundary.dcm']);
         writematrix([strLrg strUrg],[foutputdir,name,'_1-1_StrucRg.txt']);
         dicomwrite(uint8(255*(Smap_rep1/2+0.5)),[foutputdir,name,'_1-3_1rep-Stokes.dcm']);
         dicomwrite(uint8(255*(Smap_avg/2+0.5)),[foutputdir,name,'_1-3_4rep-Stokes.dcm']);
-        dicomwrite(uint8(255*(permute(dopu_splitSpectrum,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
+        
+        % 对DOPU图像应用边界处理
+        dopu_with_boundary = dopu_splitSpectrum;
+        for iY = 1:size(dopu_with_boundary, 3)
+            for iX = 1:size(dopu_with_boundary, 2)
+                surface_pos = round(topLines(iX, iY));
+                if surface_pos > 1 && surface_pos <= size(dopu_with_boundary, 1)
+                    dopu_with_boundary(1:surface_pos-1, iX, iY) = 0;  % 边界以上的部分设为黑色
+                end
+            end
+        end
+        
+        % 对1-4 DOPU图像应用阈值过滤
+        dopu_thresholded = dopu_splitSpectrum;
+        dopu_thresholded(dopu_thresholded <= 0.5) = 0;  % 小于等于0.5的设为0
+        
+        dicomwrite(uint8(255*(permute(dopu_thresholded,[1 2 4 3]))),[foutputdir,name,'_1-4_dopu_SS.dcm']);
+        dicomwrite(uint8(255*(permute(dopu_with_boundary,[1 2 4 3]))),[foutputdir,name,'_1-5_dopu_SS_with_boundary.dcm']);
         
         
         if ~params.processing.hasSeg
