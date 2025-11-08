@@ -202,10 +202,23 @@ for nr = nR
     
     czrg = 1:320;% set z range
     topLines = ones(nX,nY);
-    % if params.processing.hasSeg
-    %     load([name, '.mat']);
-    %     topLines = round(topLines);topLines(topLines<=1) = 1;
-    % end
+    if params.processing.hasSeg
+        matFilePath = [name, '.mat'];
+        if exist(matFilePath, 'file')
+            try
+                load(matFilePath, 'topLines');
+                topLines = round(topLines);
+                topLines(topLines<=1) = 1;
+                fprintf('成功加载分割结果文件: %s\n', matFilePath);
+            catch ME
+                warning('加载分割结果文件失败: %s\n错误: %s\n将自动进行表面分割', matFilePath, ME.message);
+                params.processing.hasSeg = 0;  % 自动切换到不使用预分割模式
+            end
+        else
+            warning('分割结果文件不存在: %s\n将自动进行表面分割', matFilePath);
+            params.processing.hasSeg = 0;  % 自动切换到不使用预分割模式
+        end
+    end
     if params.range.setZrg
         czrg = czrg(1:round(params.range.setZrg));
     end
