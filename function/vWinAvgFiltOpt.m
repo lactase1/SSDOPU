@@ -1,4 +1,4 @@
-function [outFrameWfilt] = vWinAvgFiltOpt_2(inFrame,inWeight,kRL,kRU,Nsec)
+function [outFrameWfilt] = vWinAvgFiltOpt(inFrame,inWeight,kRL,kRU,Nsec)
     %input prams
     % inFrame ==>  ‰»Î
     % inWeight ==> ÷√–≈∂»

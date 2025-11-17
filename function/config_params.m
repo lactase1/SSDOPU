@@ -16,7 +16,7 @@ function params = config_params()
 params = struct();
 
 %% ========== TIFF生成控制参数 ==========
-params.tiff.make_tiff = 0;        % 1: 生成TIFF文件; 0: 不生成
+params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
 params.tiff.tiff_frame = 270;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
@@ -28,8 +28,8 @@ params.processing.do_reg = 0;                  % 是否进行帧间配准(运动
 params.processing.useref = 1;                  % 参考信号模式 (1:使用前50k A-line, 0:使用背景, -1:不使用)
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
-params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
-params.processing.max_frames = 2;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.hasSeg = 12;                  % 是否已有分割结果(.mat文件)
+params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 
 %% ========== 并行处理设置 ==========
@@ -43,11 +43,18 @@ params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
-% 当前只使用平均方法(avg)路径，已移除对 eig 路径的支持
 % 分裂谱模式: 'overlap9' (默认，9 段半重叠) 或 'nonoverlap5' (5 段无重叠)
 params.dopu.ss_mode = 'overlap9';
 % 窗口 Tukey alpha（可由 nonoverlap5 函数使用）
 params.dopu.win_alpha = 0.25;
+
+%% ========== 空间DOPU设置 ==========
+params.dopu.do_spatial = 1;                    % 是否启用空间DOPU (1:启用, 0:禁用)
+% 空间DOPU基于3x3邻域平均计算
+
+%% ========== 组合DOPU设置 ==========
+params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂谱+空间) (1:启用, 0:禁用)
+% 组合DOPU先计算分裂谱DOPU，再进行空间滤波
 
 %% ========== 偏振分析参数 ==========
 % 【优化说明】基于PS-OCT技术特性调整偏振分析参数：
@@ -122,6 +129,8 @@ if nargout == 0
     fprintf('TIFF生成: %s (帧: %d)\n', iif(params.tiff.make_tiff, '启用', '禁用'), params.tiff.tiff_frame);
     fprintf('DICOM保存: %s\n', iif(params.tiff.saveDicom, '启用', '禁用'));
     fprintf('分光谱DOPU: %s (模式: %s)\n', iif(params.dopu.do_ssdopu, '启用', '禁用'), params.dopu.ss_mode);
+    fprintf('空间DOPU: %s\n', iif(params.dopu.do_spatial, '启用', '禁用'));
+    fprintf('组合DOPU: %s\n', iif(params.dopu.do_combined, '启用', '禁用'));
     fprintf('DOPU计算方法: avg (固定)\n');
     fprintf('滤波模式: %s\n', iif(params.mode.wovWinF, '固定高斯', '自适应DOPU'));
     fprintf('平均层数 (Avnum): %d\n', params.polarization.Avnum);

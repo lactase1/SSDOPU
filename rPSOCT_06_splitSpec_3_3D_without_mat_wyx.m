@@ -19,8 +19,8 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'D:\1-Liu Jian\yongxin.wang\tmp\';
-output_base = 'D:\1-Liu Jian\yongxin.wang\tmp1';
+data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT';
+output_base = 'D:\1-Liu Jian\yongxin.wang\tmp';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -236,7 +236,7 @@ function rPSOCT_process_single_file(varargin)
             if exist(matFilePath, 'file')
                 try
                     load(matFilePath, 'topLines');
-                    topLines = round(topLines);
+                    topLines = double(topLines);
                     topLines(topLines <= 1) = 1;
                     fprintf('成功加载分割结果文件: %s\n', matFilePath);
                 catch ME
@@ -288,9 +288,28 @@ function rPSOCT_process_single_file(varargin)
                 Bd1 = Bs1;
                 Bd2 = Bs2;
             end
-        %% split spectrum
-        [dopu_splitSpectrum(:, :, iY), dopu_ss] = calculateSplitSpectrumDOPU(...
-            Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+        %% split spectrum / spatial / combined DOPU
+        if params.dopu.do_combined
+            % 使用组合DOPU (分裂谱 + 空间)
+            dopu_splitSpectrum(:, :, iY) = calculateCombinedDOPU(...
+                Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+            % 为后续处理创建dopu_ss变量（组合DOPU没有多重复平均，所以用单重复）
+            dopu_ss = dopu_splitSpectrum(:, :, iY);
+        elseif params.dopu.do_spatial
+            % 使用空间DOPU
+            % 需要先计算FFT结果
+            Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
+            Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
+            IMG1_wholeStr = Bimg1_wholeStr(czrg, :, :);
+            IMG2_wholeStr = Bimg2_wholeStr(czrg, :, :);
+            dopu_splitSpectrum(:, :, iY) = calculateSpatialDOPU(IMG1_wholeStr, IMG2_wholeStr, params);
+            % 为后续处理创建dopu_ss变量（空间DOPU没有多重复平均，所以用单重复）
+            dopu_ss = dopu_splitSpectrum(:, :, iY);
+        else
+            % 使用分裂谱DOPU (默认)
+            [dopu_splitSpectrum(:, :, iY), dopu_ss] = calculateSplitSpectrumDOPU(...
+                Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+        end
         %% whole spectrum nZ*nX*nR==> fft(complex)
         Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
         Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
@@ -647,9 +666,9 @@ function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,t
         EVmm = imfilter(EVm, h1, 'replicate');
     else
         % 模式0: 自适应DOPU滤波
-        [EQmm] = vWinAvgFiltOpt_2_1(EQm, dopu_splitSpec_M, kRL, kRU);
-        [EUmm] = vWinAvgFiltOpt_2_1(EUm, dopu_splitSpec_M, kRL, kRU);
-        [EVmm] = vWinAvgFiltOpt_2_1(EVm, dopu_splitSpec_M, kRL, kRU);
+        [EQmm] = vWinAvgFiltOpt(EQm, dopu_splitSpec_M, kRL, kRU);
+        [EUmm] = vWinAvgFiltOpt(EUm, dopu_splitSpec_M, kRL, kRU);
+        [EVmm] = vWinAvgFiltOpt(EVm, dopu_splitSpec_M, kRL, kRU);
     end
 
     % 调用核心算法，同时获得处理前后的完整结果
