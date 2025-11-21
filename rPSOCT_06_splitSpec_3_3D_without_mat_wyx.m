@@ -20,7 +20,7 @@ end
 
 % 设置数据路径
 data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT';
-output_base = 'D:\1-Liu Jian\yongxin.wang\tmp';
+output_base = 'D:\1-Liu Jian\yongxin.wang\tmp\3_Avnum';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -110,9 +110,11 @@ function rPSOCT_process_single_file(varargin)
     % - 支持可选参数 params.parallel.maxWorkers（若在 config 中设置）
     if isempty(gcp('nocreate'))
         try
+            % 首先尝试使用默认的 local 集群
             c_local = parcluster('local');
             sysCores = feature('numcores');
             maxAllowed = min(c_local.NumWorkers, sysCores);
+
             % 如果在 config 中提供了并行最大 worker 数则使用它
             if isfield(params, 'parallel') && isfield(params.parallel, 'maxWorkers') && params.parallel.maxWorkers > 0
                 targetWorkers = min(maxAllowed, params.parallel.maxWorkers);
@@ -120,13 +122,40 @@ function rPSOCT_process_single_file(varargin)
                 % 默认不要超过 8 个 worker，也不要超过可用核数
                 targetWorkers = max(1, min(maxAllowed, 8));
             end
+
             fprintf('尝试启动并行池 (local)，使用 %d 个 worker...\n', targetWorkers);
             parpool(c_local, targetWorkers);
-        catch ME
-            if isfield(ME, 'identifier') && ~isempty(ME.identifier)
-                warning(ME.identifier, '%s\n将改为串行执行。', ME.message);
-            else
-                warning('parpool:startupFailed', '%s\n将改为串行执行。', ME.message);
+
+        catch ME_local
+            fprintf('本地并行池启动失败: %s\n', ME_local.message);
+
+            % 如果本地集群失败，尝试使用进程集群
+            try
+                fprintf('尝试使用进程集群...\n');
+                c_processes = parcluster('Processes');
+                sysCores = feature('numcores');
+                maxAllowed = min(c_processes.NumWorkers, sysCores);
+
+                if isfield(params, 'parallel') && isfield(params.parallel, 'maxWorkers') && params.parallel.maxWorkers > 0
+                    targetWorkers = min(maxAllowed, params.parallel.maxWorkers);
+                else
+                    targetWorkers = max(1, min(maxAllowed, 8));
+                end
+
+                fprintf('尝试启动进程并行池，使用 %d 个 worker...\n', targetWorkers);
+                parpool(c_processes, targetWorkers);
+
+            catch ME_processes
+                fprintf('进程并行池启动失败: %s\n', ME_processes.message);
+
+                % 如果都失败了，尝试使用更少的 worker 数
+                try
+                    fprintf('尝试使用单 worker 并行池...\n');
+                    parpool('local', 1);
+                catch ME_single
+                    fprintf('单 worker 并行池启动失败: %s\n', ME_single.message);
+                    fprintf('所有并行池启动尝试均失败，将改为串行执行。\n');
+                end
             end
         end
     end
@@ -148,11 +177,11 @@ function rPSOCT_process_single_file(varargin)
     % This reads the parameter used for the data acquisition from *.oct* file
     fid               = fopen(filename);
     bob               = fread(fid, 1, 'uint32');
-    SPL               = fread(fid, 1, 'double');
+    SPL               = fread(fid, 1, 'double'); % A-scan长度
     nX                = fread(fid, 1, 'uint32'); %% number of Alines
     nY                = fread(fid, 1, 'uint32'); %% number of B-scans
-    Boffset           = fread(fid, 1, 'uint32');
-    Blength           = fread(fid, 1, 'uint32') + 1;
+    Boffset           = fread(fid, 1, 'uint32'); 
+    Blength           = fread(fid, 1, 'uint32') + 1; % =SPL
     Xcenter           = fread(fid, 1, 'double');
     Xspan             = fread(fid, 1, 'double');
     Ycenter           = fread(fid, 1, 'double');
@@ -183,13 +212,12 @@ function rPSOCT_process_single_file(varargin)
     nZcrop            = numel(IMcropRg);
     imshowrgZ         = 1:nZcrop;
     jusamp            = zeros(nZcrop, nX, 4);
-    winG              = tukeywin(Blength, 0.25);
-    %(a)subWins: params for split spectrum DOPU
-    nWin              = 9;
-    winL              = 2 * Blength / (nWin + 1);
-    winG              = tukeywin(winL, 0.25);
-    winG_whole        = tukeywin(Blength, 0.25); % window for whole spectrum
-    windex            = 1 : winL / 2 : Blength;
+
+    nWin              = 9; % 子窗口数量，用于分裂谱DOPU
+    winL              = 2 * Blength / (nWin + 1); % 子窗口长度
+    winG              = tukeywin(winL, 0.25); % 子窗口的Tukey窗
+    winG_whole        = tukeywin(Blength, 0.25); % 整体谱的窗口
+    windex            = 1 : winL / 2 : Blength; % 子窗口起始索引，步长为winL/2以实现重叠
 
     % 添加帧数限制功能
     if params.processing.max_frames > 0
@@ -198,6 +226,7 @@ function rPSOCT_process_single_file(varargin)
         fprintf('帧数限制: %d -> %d (最大允许: %d)\n', original_nY, nY, params.processing.max_frames);
     end
 
+    % 背景信号参考
     if params.processing.useref == 1 %use the first 50k a-lines to calc ref
         fseek(fid, bob, 'bof');
         n_ref = floor(min(50000, floor(nY * nX / 2) * 2) / nX);
@@ -225,9 +254,11 @@ function rPSOCT_process_single_file(varargin)
         if params.range.setZrg
             foutputdir = fullfile(output_base, [name, '.rep', num2str(nr), 'fastZ_testDDG', num2str(params.range.setZrg), '\']);
         else
-            foutputdir = fullfile(output_base, [name, '.rep', num2str(nr), 'DDG_corr3_wobg_test\']);
+            foutputdir = fullfile(output_base, [name, '.rep', num2str(nr), 'DDG\']);
         end
-        if ~exist(foutputdir, 'dir'), mkdir(foutputdir); end
+        if ~exist(foutputdir, 'dir')
+             mkdir(foutputdir); 
+        end
 
         czrg = 1:320; % set z range
         topLines = ones(nX, nY);
@@ -251,26 +282,24 @@ function rPSOCT_process_single_file(varargin)
         if params.range.setZrg
             czrg = czrg(1:round(params.range.setZrg));
         end
-        nZcrop = numel(czrg);
-        nZ = nZcrop;
+        nZcrop = numel(czrg); % 深度
+
         % (c) creat array to store results
         LA_c_cfg1_avg = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
         PhR_c_cfg1_avg = zeros(nZcrop - params.polarization.Avnum, nX, nY);
         cumLA_cfg1_avg = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
         LA_c_cfg1_eig = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
-        PhR_c_cfg1_eig = zeros(nZcrop - params.polarization.Avnum, nX, nY);
-        cumLA_cfg1_eig = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
 
         LA_Ms_cfg1_rmBG = LA_c_cfg1_avg;
         PhR_Ms_cfg1_rmBG = cumLA_cfg1_avg;
         cumLA_Ms_cfg1_rmBG = LA_c_cfg1_eig;
-        Smap_avg = zeros(numel(czrg), nX, 3, nY);
-        Smap_rep1 = zeros(numel(czrg), nX, 3, nY);
-        Strus = zeros(numel(czrg), nX, nY);
-        Stru_OAC = Strus;
-        dopu_splitSpectrum = zeros(numel(czrg), nX, nY);
+        Smap_avg = zeros(nZcrop, nX, 3, nY);
+        Smap_rep1 = zeros(nZcrop, nX, 3, nY);
+        dopu_splitSpectrum = zeros(nZcrop, nX, nY);
         fprintf('开始处理 %d 个B-Scan...\n', nY);
+
         parfor iY = 1:nY % Bscan number (parfor不支持指定步长)
+            %% 数据读取和预处理：读取第 iY 个 B-scan 的原始信号，进行背景减除和色散校正
             Bs1 = zeros(Blength, nX, nr);
             Bs2 = zeros(Blength, nX, nr);
             fid = fopen(filename);
@@ -626,7 +655,9 @@ end
 % ====================================================================================
 function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF)
     % 处理可选参数
-    if nargin < 10, wovWinF = 0; end  % 直接设置wovWinF而不是params.mode.wovWinF
+    if nargin < 10
+        wovWinF = 0; 
+    end  % 直接设置wovWinF而不是params.mode.wovWinF
 
     % 获取数据维度
     [nZ, nX] = size(IMG_ch1);
@@ -645,15 +676,14 @@ function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,t
     [ES0, ES1, ES2, ES3] = cumulativeQUV(IMG_ch1, IMG_ch2);
 
     % 信号强度检查
-    if sum(ES0(:)) < 5, return; end
+    if sum(ES0(:)) < 5
+        return; 
+    end
 
     % 计算归一化Stokes分量
     EQm = ES1 ./ ES0;   % Q分量(水平-垂直偏振差)
     EUm = ES2 ./ ES0;   % U分量(±45°偏振差)
     EVm = ES3 ./ ES0;   % V分量(左右旋圆偏振差)
-
-    % 备用代码: QUV_E(:,:,:) = cat(3, EQm, EUm, EVm);
-    % 备用代码: Stru_E = 20*log10(S0);
 
     % 初始化结构矩阵
     Stru_E = zeros(nZ, nX);
@@ -672,7 +702,7 @@ function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,t
     end
 
     % 调用核心算法，同时获得处理前后的完整结果
-    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum);
+    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum, dopu_splitSpec_M);
 end
 
 %% ====================================================================================

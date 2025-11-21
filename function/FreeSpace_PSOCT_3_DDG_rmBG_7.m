@@ -1,164 +1,243 @@
-% 高斯滤波代替中值和平滑。
-% QUV小尺度滤波（h1)，光轴大尺度滤波(h2)。
-% 对每个A-scan去除DC分量，并且执行标准化
-% 用滤波后的光轴计算旋转矩阵。
-% output cumulative LA as well ---20240825
-% use DDG to cal La and phr
-% use T3 as a marker to diff the BG and polar
-% correct the BG effect use norm(P3-P1) as a 
-% output the Phr with BG removal
-% cal dr LA need the Phr with BG induced phr---20240831
-% test for retina imaging --------------------20240902
-% use more than 3 data point to cal LA and then avg phr
-% for volume data
+% ============================================================================
+% FreeSpace_PSOCT_3_DDG_rmBG_7.m - 基于DDG的双折射计算函数
+% ============================================================================
+%
+% 功能描述:
+%   使用差分梯度分解(DDG)方法从PS-OCT数据计算双折射参数
+%   包括光轴方向(Optical Axis)和相位延迟(Phase Retardation)
+%   支持背景双折射校正和深度分辨率计算
+%
+% 主要特性:
+%   - 高斯滤波代替传统中值和平滑滤波
+%   - QUV小尺度滤波(h1)和光轴大尺度滤波(h2)
+%   - 每个A-scan的DC分量去除和向量标准化
+%   - 使用滤波后光轴计算旋转矩阵
+%   - 输出累积光轴 - 2024/08/25
+%   - 基于信噪比(DOPU)动态调整拟合圆盘直径，避免噪声导致的相位延迟高估
+%
+% 算法特性:
+%   - 使用DDG方法计算光轴和相位延迟
+%   - 以T3(P3-P1的范数)作为背景和偏振信号的区分标记
+%   - 使用norm(P3-P1)校正背景效应
+%   - 输出去除背景后的相位延迟
+%   - 计算深度分辨率光轴需要包含背景诱导相位的相位延迟 - 2024/08/31
+%   - 基于信噪比(DOPU)动态调整拟合圆盘直径，避免噪声导致的相位延迟高估
+%
+% 历史更新:
+%   - 2024/09/02: 测试视网膜成像
+%   - 使用超过3个数据点计算光轴并平均相位延迟
+%   - 支持体积数据处理
+%
+% 输入参数:
+%   Qm, Um, Vm: Q、U、V Stokes参数矩阵
+%   Stru: 结构矩阵
+%   test_seg_top: 分割顶部位置
+%   h1, h2: 滤波核
+%   Avnum: 最大平均层数(窗口大小)，决定在每个深度位置最多使用多少个连续层来计算双折射
+%   dopu_splitSpec_M: 分光谱DOPU矩阵，用于评估信噪比并动态调整拟合圆盘直径
+%
+% 输出参数:
+%   LA, PhR, cumLA: 背景校正后的深度分辨率光轴、相位延迟、累积光轴
+%   LA_raw, PhR_raw, cumLA_raw: 原始结果(无背景校正)
+% ============================================================================
 
-function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(Qm,Um,Vm,Stru,test_seg_top,h1,h2,Avnum)
+function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(Qm,Um,Vm,Stru,test_seg_top,h1,h2,Avnum,dopu_splitSpec_M)
 showimg = 0;
 
 
-%% flatting
-StruF=Stru*0;QmF=Qm*0;UmF=Um*0;VmF=Vm*0;
+%% 数据展平处理 (Data Flattening)
+% 将基于曲面分割的数据转换为平面格式
+% OCT数据通常沿着曲面采集，从组织表面开始而不是图像顶部
+% 将每个B-scan从分割点开始的数据"展平"到统一的高度起始点
+% 这样所有B-scan都从"相对深度=1"开始，便于后续统一处理
+
+% 计算展平后的最大长度：确保数组足够大
+max_flattened_length = max(size(Stru,1) - min(test_seg_top) + 1, size(Stru,1));
+
+% 预分配展平数组
+StruF = zeros(max_flattened_length, size(Stru,2));
+QmF = zeros(max_flattened_length, size(Qm,2));
+UmF = zeros(max_flattened_length, size(Um,2));
+VmF = zeros(max_flattened_length, size(Vm,2));
+
+% 实际填充数据
 for j=1:size(Stru,2)
-   StruF(1:size(Stru,1)-test_seg_top(j)+1,j)=Stru(test_seg_top(j):size(Stru,1),j);
-   QmF(1:size(Stru,1)-test_seg_top(j)+1,j)=Qm(test_seg_top(j):size(Stru,1),j);
-   UmF(1:size(Stru,1)-test_seg_top(j)+1,j)=Um(test_seg_top(j):size(Stru,1),j);
-   VmF(1:size(Stru,1)-test_seg_top(j)+1,j)=Vm(test_seg_top(j):size(Stru,1),j);
+   start_idx = max(1, test_seg_top(j));  % 确保起始索引至少为1
+   flattened_length = size(Stru,1) - start_idx + 1;
+   StruF(1:flattened_length, j) = Stru(start_idx:size(Stru,1), j);
+   QmF(1:flattened_length, j) = Qm(start_idx:size(Qm,1), j);
+   UmF(1:flattened_length, j) = Um(start_idx:size(Um,1), j);
+   VmF(1:flattened_length, j) = Vm(start_idx:size(Vm,1), j);
 end
 
 
-%%  QUV filtering
-
-% QmF=imfilter(QmF,h1,'replicate'); % 个人认为不应该在这里滤波
-% UmF=imfilter(UmF,h1,'replicate'); 
-% VmF=imfilter(VmF,h1,'replicate');
-
-
-% QF=QmF-mean(QmF); % zero-meaning
-% UF=UmF-mean(UmF);
-% VF=VmF-mean(VmF);
+%% QUV标准化和预处理 (QUV Normalization and Preprocessing)
+% 对QUV数据进行标准化处理，便于后续向量计算
+% 将QUV向量归一化到单位球面上
 QF=QmF;UF=UmF;VF=VmF;
 
-QF1=QF./sqrt(QF.^2+UF.^2+VF.^2); % normallization
+QF1=QF./sqrt(QF.^2+UF.^2+VF.^2); % 向量标准化
 UF1=UF./sqrt(QF.^2+UF.^2+VF.^2);
 VF1=VF./sqrt(QF.^2+UF.^2+VF.^2);
 
 QF1(isnan(QF1)) = 0;    UF1(isnan(UF1)) = 0;    VF1(isnan(VF1)) = 0;
 
-SmapF=cat(3,QF1,UF1,VF1);
+SmapF=cat(3,QF1,UF1,VF1); % 合并为3D矩阵 [深度×X×3]
 % figure(11),imagesc(SmapF);
-%% rot 90 degree
-% vetorq=pi/2*[0;1;0];
-% rotq=rotationVectorToMatrix(vetorq);
-% for i=1:size(SmapF,1)
-%     for j=1:size(SmapF,2)
-%         aa=squeeze(SmapF(i,j,:));
-%         SmapF1(i,j,1:3)=rotq*aa;
-%     end
-% end
 
-SmapF1=smoothdata(SmapF, 1, 'movmean', 15);
-%% svd to fit LA 
+SmapF1=smoothdata(SmapF, 1, 'movmean', 15); % 沿深度方向进行移动平均平滑，减少噪声
+
+
+%% DDG双折射计算 (DDG Birefringence Calculation)
+% 使用Differential Decomposition of the Gradient方法计算双折射
+% 从多层QUV数据点拟合双折射轴和相位延迟
 stLayer =1;
-DTheta = 1.0675*2*pi; %[rad] estimated maximum phr around Q from BG(50 cm more)
-dTheta = DTheta/320; %[rad/px]
-LABG = [1 0 0];
+DTheta = 1.0675*2*pi; % 背景最大相位延迟估计 [rad] (50cm路径导致)
+dTheta = DTheta/320; % 每像素相位延迟 [rad/px]
+LABG = [1 0 0]; % 背景双折射轴方向(沿X轴)
 % Avnum = 3;
 phd=zeros(size(SmapF1,1),size(SmapF1,2));
-for j=1:size(SmapF1,2)
+
+% 对每个A-scan进行计算
+for j=1:size(SmapF1,2)  % X方向循环
     dirCheck = 1;
-    for i=1:size(SmapF1,1)-Avnum
-        planeData=squeeze(SmapF1(i:i+Avnum,j,:)); % QUV points from Avnum layers
-%         planeData=squeeze(SmapF1([i,i+Astep,i+Astep*2],j,:)); % QUV points from Avnum layers
-        x1=squeeze(planeData(:,1)); y1=squeeze(planeData(:,2)); z1=squeeze(planeData(:,3));
-        nx=sum(sum(x1==0));
-        if x1==0|nx>0 % skip if Qs has 0
-            cumLA_bg(i,j,1:3)=0;
-            cumLA_raw(i,j,1:3)=0;
-            phR(i,j)=0;
-            phR_rmBG(i,j) = 0;
-            phR_raw(i,j) = 0;
-            phd(i,j)=0;
-            rotationVector(i,j,1:3)=0;
-        else
-            % rotate the det p to remove DC part of BG
+    for i=1:size(SmapF1,1)-3  % 深度方向循环(最小Avnum=3，避免越界)
+        % 根据信噪比(DOPU值)动态计算合适的圆盘直径
+        current_dopu = dopu_splitSpec_M(i,j);
+        dynamic_Avnum = calculateDynamicAvnum(current_dopu, Avnum);
+        
+        % 确保不会越界
+        max_possible_i = size(SmapF1,1) - dynamic_Avnum;
+        if i > max_possible_i
+            dynamic_Avnum = max(3, size(SmapF1,1) - i);
+        end
+        
+        % 迭代计算：如果轨迹半径太小，增加Avnum重新计算
+        min_radius_threshold = 0.05;  % 最小轨迹半径阈值
+        max_iterations = 3;  % 最大迭代次数
+        iteration = 1;
+        valid_calculation = false;
+        
+        while ~valid_calculation && iteration <= max_iterations
+            planeData=squeeze(SmapF1(i:i+dynamic_Avnum-1,j,:)); % 提取dynamic_Avnum个连续层的QUV数据
+            x1=squeeze(planeData(:,1)); y1=squeeze(planeData(:,2)); z1=squeeze(planeData(:,3));
+            nx=sum(sum(x1==0));
+            if x1==0|nx>0 % 数据有效性检查
+                cumLA_bg(i,j,1:3)=0;
+                cumLA_raw(i,j,1:3)=0;
+                phR(i,j)=0;
+                phR_rmBG(i,j) = 0;
+                phR_raw(i,j) = 0;
+                phd(i,j)=0;
+                rotationVector(i,j,1:3)=0;
+                valid_calculation = true;  % 无数据，标记为有效
+                break;
+            end
+            
+            % 背景校正计算
             ps_bg_rdu = [];ps_bg_rm = [];
-            for jL =1:Avnum
+            for jL =1:dynamic_Avnum
                 inpp = planeData(jL,:);
                 outp = rotationVectorToMatrix(-1*(i+test_seg_top(j)+stLayer-0)*dTheta*LABG)*inpp';
                 outp2 = rotationVectorToMatrix(-1*(i+test_seg_top(j)+stLayer+jL-2)*dTheta*LABG)*inpp';
-%                 outp = rotationVectorToMatrix((i+test_seg_top(j)+stLayer-0)*dTheta*LABG)*inpp';
-%                 outp2 = rotationVectorToMatrix((i+test_seg_top(j)+stLayer+jL-2)*dTheta*LABG)*inpp';
                 ps_bg_rdu = [ps_bg_rdu;outp'];
                 ps_bg_rm = [ps_bg_rm;outp2'];
             end
             
-            % cal the LA while correct the BG: prepare points and vectors
-            % [DDG: pick points at start, middle and end to cal LA]
-            P1  = ps_bg_rm(1,:); P2 = ps_bg_rm(round((1+Avnum)/2),:); P3 = ps_bg_rm(Avnum,:);
-            P1p = ps_bg_rdu(1,:);P2p = ps_bg_rdu(2,:);P3p = ps_bg_rdu(3,:);
+            % 选择三个代表性点
+            P1  = ps_bg_rm(1,:); 
+            P2 = ps_bg_rm(max(1, round((1+dynamic_Avnum)/2)),:); 
+            P3 = ps_bg_rm(dynamic_Avnum,:);
+            P1p = ps_bg_rdu(1,:);
+            P2p = ps_bg_rdu(min(size(ps_bg_rdu,1), 2),:);
+            P3p = ps_bg_rdu(min(size(ps_bg_rdu,1), 3),:);
             T1p = P2p - P1p; T2p = P3p-P2p; T1 = P2-P1;T2 = P3-P2;
             Tb1 = P1 -P1p; Tb2 = P3-P3p;
             
-            % direct cal LA and phr from bg rm points [bgrm DDG]
-            B_bg_rm = cross(T1,T2); B_bg_rm = B_bg_rm/sqrt(sum(B_bg_rm.^2));
-            % ddg use normal vector of T to cal phr between adjacent points
-            [Subphr_bg_rm_Ts] = ddgTsPhr(ps_bg_rm,B_bg_rm);
-% %             phr_bg_rm_Ts(i,j) = median(acos(Subphr_bg_rm_Ts));% acos first , then avg
-%             phr_bg_rm_Ts(i,j) = acos(median(Subphr_bg_rm_Ts));% avg acos first, then acos
+            % 计算轨迹半径（P3-P1的范数）
+            trajectory_radius = norm(P3-P1);
             
-            % ddg use tangent vector to cal phr between adjacent points
-%             [Subphr_bg_rm_Ps] = ddgPsPhr(ps_bg_rm,B_bg_rm);
-%             phR_bgrm_Ps2(i,j) = median(acos(Subphr_bg_rm_Ps));% acos first , then avg
+            % 如果轨迹半径太小，增加Avnum重新计算
+            if trajectory_radius < min_radius_threshold && dynamic_Avnum < Avnum && iteration < max_iterations
+                dynamic_Avnum = min(dynamic_Avnum + 2, Avnum);  % 增加Avnum
+                % 重新检查越界
+                max_possible_i_new = size(SmapF1,1) - dynamic_Avnum;
+                if i > max_possible_i_new
+                    dynamic_Avnum = max(3, size(SmapF1,1) - i);
+                end
+                iteration = iteration + 1;
+                continue;  % 重新计算
+            end
+            
+            % 轨迹半径足够大，继续正常计算
+            valid_calculation = true;
+            
+            % DDG计算: 准备点和向量用于双折射计算
+            % 选择三个代表性点: 起点、中点、终点
+            P1  = ps_bg_rm(1,:); 
+            P2 = ps_bg_rm(max(1, round((1+dynamic_Avnum)/2)),:); 
+            P3 = ps_bg_rm(dynamic_Avnum,:);
+            P1p = ps_bg_rdu(1,:);
+            P2p = ps_bg_rdu(min(size(ps_bg_rdu,1), 2),:);
+            P3p = ps_bg_rdu(min(size(ps_bg_rdu,1), 3),:);
+            T1p = P2p - P1p; T2p = P3p-P2p; T1 = P2-P1;T2 = P3-P2;
+            Tb1 = P1 -P1p; Tb2 = P3-P3p;
+            
+            % 从背景校正点直接计算双折射和相位延迟 [bgrm DDG]
+            % 双折射轴计算: 两个切向量的叉积给出垂直于轨迹平面的法向量
+            B_bg_rm = cross(T1,T2); B_bg_rm = B_bg_rm/sqrt(sum(B_bg_rm.^2));
+            % 使用法向量计算相位延迟
+            [Subphr_bg_rm_Ts] = ddgTsPhr(ps_bg_rm,B_bg_rm);
             phR_raw(i,j) = acos(median(Subphr_bg_rm_Ts));% avg acos first, then acos
             cumLA_raw(i,j,1:3) = -B_bg_rm;
             
-            % calc Bp with bg and then correct Bp with deltaB [BG corr DDG]
+            % 背景校正DDG: 先计算Bp，再用deltaB校正
+            % 原理: 区分背景双折射和组织双折射
             Bp = cross(T1p,T2p); 
-            T3_nor = norm(P3-P1);
-            % condition to check the BG and cal deltaB
-            if T3_nor < 0.065%0.7/0.12
-                deltaB = [0 0 0];
+            T3_nor = norm(P3-P1); % P3-P1的范数，用于区分背景和信号
+            % 根据T3_nor判断是否需要背景校正
+            if T3_nor < 0.065%0.7/0.12  % 阈值判断
+                deltaB = [0 0 0]; % 无需校正
                 T1 = T1p; T2 = T2p;
                 if dirCheck && (Bp(1) > 0) %% check LA direction
                     Bp = -Bp;
                 end
-%                 if i == 10, Bp = -Bp;end %% for 2024.07.03_15.54.54_2.zhaoyu_repB only
             else
                 dirCheck = 0;
-                deltaB = cross(T1p,Tb2) + cross(T2p,Tb1) - cross(Tb1,Tb2);% BG correction
+                deltaB = cross(T1p,Tb2) + cross(T2p,Tb1) - cross(Tb1,Tb2);% 背景校正计算
             end
-            B = Bp + deltaB; % corrected LA
-            B = B/sqrt(sum(B.^2)); % normalize
+            B = Bp + deltaB; % 校正后的双折射轴
+            B = B/sqrt(sum(B.^2)); % 标准化
+            
             T3_nors(i,j) = T3_nor;
-            if 1
+            if 1  % 总是执行的分支
                 if T3_nor < 0.065
-                    % cal phr use Ps ()
-%                     phR(i,j) = acos(median(ddgPsPhr(ps_bg_rdu,B)));
                     phR(i,j) = acos(median(ddgTsPhr(ps_bg_rdu,B)));
-                    phR_rmBG(i,j) = max([phR(i,j) - 1*dTheta, 0]);
-                    phR_rmBG(i,j) = min([phR(i,j), 0.2]);
+                    phR_rmBG(i,j) = max([phR(i,j) - 1*dTheta, 0]); % 去除背景相位
+                    phR_rmBG(i,j) = min([phR(i,j), 0.2]); % 上限限制
                 else
-%                     phR(i,j) = acos(median(ddgPsPhr(ps_bg_rm,B)));
                     phR(i,j) = acos(median(ddgTsPhr(ps_bg_rm,B)));
                     phR_rmBG(i,j) = phR(i,j);
                 end
+                cumLA_bg(i,j,1:3)=-B; % 背景校正后的累积双折射
+            else  % 从不执行的分支
+                N1 = cross(B,T1); N2 = cross(B,T2);% normal vector
+                phr = acos(dot(N1,N2)/sqrt(sum(N1.^2)*sum(N2.^2)));% phase retardation
+                phR(i,j)=phr;
+                phr = max([phr-1*dTheta, 0]);
                 cumLA_bg(i,j,1:3)=-B;
-            else
-            N1 = cross(B,T1); N2 = cross(B,T2);% normal vector
-            phr = acos(dot(N1,N2)/sqrt(sum(N1.^2)*sum(N2.^2)));% phase retardation
-            phR(i,j)=phr;
-            phr = max([phr-1*dTheta, 0]);
-            cumLA_bg(i,j,1:3)=-B;
-            phR_rmBG(i,j) = phr; %% rm BG 
-            Bps(i,j,1:3) = Bp/sqrt(sum(Bp.^2));
-            T3_nors(i,j) = T3_nor;
+                phR_rmBG(i,j) = phr; %% rm BG 
+                Bps(i,j,1:3) = Bp/sqrt(sum(Bp.^2));
+                T3_nors(i,j) = T3_nor;
             end
             
         end
     end
 end
-% post process the LA 
-%% 光轴滤波
+
+
+%% 后处理: 对计算结果进行滤波和深度分辨率转换
+% 光轴滤波: 减少噪声，提高双折射轴估计的稳定性
 [cumLA_bg_gF] = LAgFfilt(cumLA_bg,h2);
 [cumLA_raw_gF] = LAgFfilt(cumLA_raw,h2);
 if showimg
@@ -167,7 +246,8 @@ figure;imshow(cumLA_raw_gF*0.5+0.5,[])
 figure;imshow(phR_rmBG,[0 0.25])
 figure;imshow(phR_raw,[0 0.25])
 end
-%% 相位滤波
+
+%% 相位滤波: 减少相位延迟估计的噪声
     phR_gF=imfilter(phR,h2,'replicate');%% with BG
     phR_rmBG_gF=imfilter(phR_rmBG,h2,'replicate');%% with BG
     phR_raw_gF = imfilter(phR_raw,h2,'replicate');%% raw w/o BG
@@ -176,7 +256,8 @@ end
     figure;imshowpair(mat2gray(phR_rmBG,phrRg),mat2gray(phR_rmBG_gF,phrRg),'montage')
      figure;imshowpair(mat2gray(phR_raw,phrRg),mat2gray(phR_raw_gF,phrRg),'montage')
     end
-%% 计算旋转矩阵
+
+%% 计算旋转矩阵: 为深度分辨率转换计算初始旋转矩阵
 % for i=1:size(SmapF1,1)-Avnum
     for j=1:size(SmapF1,2)
         ax_rot(1,:)=cumLA_bg_gF(1,j,:);
@@ -189,7 +270,9 @@ end
 % loaxis22=cumLA_bg_gF;
 
 
-%% rotate the LA to achieve the depth resolved L
+%% 深度分辨率转换: 将累积光轴转换为深度分辨率光轴
+% 从累积双折射得到每层深度处的局部双折射轴
+% 通过旋转矩阵逆运算，将累积效应转换为局部效应
 [bfloaxis3D] = drLA(cumLA_bg_gF,-phR_gF,rotationVector);
 [bfloaxis3D_raw] = drLA(cumLA_raw_gF,-phR_raw_gF,rotationVector_raw);
 % [bfloaxis3D] = drLA(cumLA_bg_gF.*phR_gF,-phR_gF,rotationVector);
@@ -201,31 +284,56 @@ if showimg
     phrRg = [0 0.3];
     figure;imshowpair(mat2gray(phR_rmBG_gF,phrRg),mat2gray(phR_raw_gF,phrRg),'montage')
 end
+
 %%
 % with BG
 bfphrr=phR_rmBG_gF;
-bfloaxis3D(isnan(bfloaxis3D)) = 0;   
-bfphrr(isnan(bfphrr)) = 0;   
+bfloaxis3D(isnan(bfloaxis3D)) = 0;
+bfphrr(isnan(bfphrr)) = 0;
 % w/o BG
 bfphrr_raw=phR_raw_gF;
-bfloaxis3D_raw(isnan(bfloaxis3D_raw)) = 0;   
+bfloaxis3D_raw(isnan(bfloaxis3D_raw)) = 0;
 bfphrr_raw(isnan(bfphrr_raw)) = 0;
-% restore curved results
-LA=bfloaxis3D*0;PhR=bfphrr*0;cumLA = bfloaxis3D*0;
-LA_raw=bfloaxis3D*0;PhR_raw=bfphrr*0;cumLA_raw = bfloaxis3D*0;
-for j=1:size(Stru,2)
-    toInd = test_seg_top(j):size(LA,1); fromInd = 1:size(LA,1)-test_seg_top(j)+1;
-    LA(toInd,j,:)=bfloaxis3D(fromInd,j,:);
-    PhR(toInd,j)=bfphrr(fromInd,j);
-    cumLA(toInd,j,:)=cumLA_bg_gF(fromInd,j,:);
-    
-    LA_raw(toInd,j,:)=bfloaxis3D_raw(fromInd,j,:);
-    PhR_raw(toInd,j)=bfphrr_raw(fromInd,j);
-    cumLA_raw(toInd,j,:)=cumLA_raw_gF(fromInd,j,:); 
-end
+
+% 计算正确的输出数组大小：基于原始输入数据大小减去Avnum
+expected_output_size = size(Qm, 1) - Avnum;
+
+% 初始化临时数组，保持原始大小用于放置逻辑
+temp_size = size(bfloaxis3D, 1);
+temp_LA = zeros(temp_size, size(Qm, 2), 3);
+temp_PhR = zeros(temp_size, size(Qm, 2));
+temp_cumLA = zeros(temp_size, size(Qm, 2), 3);
+temp_LA_raw = zeros(temp_size, size(Qm, 2), 3);
+temp_PhR_raw = zeros(temp_size, size(Qm, 2));
+temp_cumLA_raw = zeros(temp_size, size(Qm, 2), 3);
+
+% restore curved results - 使用原始放置逻辑
+for j=1:size(Qm,2)
+    toInd = test_seg_top(j):min(temp_size, test_seg_top(j) + size(bfloaxis3D, 1) - 1);
+    fromInd = 1:length(toInd);
+    if ~isempty(toInd) && ~isempty(fromInd)
+        temp_LA(toInd, j, :) = bfloaxis3D(fromInd, j, :);
+        temp_PhR(toInd, j) = bfphrr(fromInd, j);
+        temp_cumLA(toInd, j, :) = cumLA_bg_gF(fromInd, j, :);
+
+        temp_LA_raw(toInd, j, :) = bfloaxis3D_raw(fromInd, j, :);
+        temp_PhR_raw(toInd, j) = bfphrr_raw(fromInd, j);
+        temp_cumLA_raw(toInd, j, :) = cumLA_raw_gF(fromInd, j, :);
+    end
 end
 
-%% cal phr used Ts: P2P1 and P3P2
+% 截断到正确的大小 - 取前 expected_output_size 行
+LA = temp_LA(1:expected_output_size, :, :);
+PhR = temp_PhR(1:expected_output_size, :);
+cumLA = temp_cumLA(1:expected_output_size, :, :);
+LA_raw = temp_LA_raw(1:expected_output_size, :, :);
+PhR_raw = temp_PhR_raw(1:expected_output_size, :);
+cumLA_raw = temp_cumLA_raw(1:expected_output_size, :, :);
+end
+
+%% 使用切向量计算相位延迟: 计算相邻点之间的相位延迟
+% 输入: ps_bg_rm - 背景校正后的3D点序列, B_bg_rm - 双折射轴
+% 输出: Subphr_bg_rm_Ts - 相位延迟余弦值数组
 function [Subphr_bg_rm_Ts] = ddgTsPhr(ps_bg_rm,B_bg_rm)
 % 3D points
 % LA
@@ -238,7 +346,8 @@ function [Subphr_bg_rm_Ts] = ddgTsPhr(ps_bg_rm,B_bg_rm)
     end
     Subphr_bg_rm_Ts(Subphr_bg_rm_Ts > 1) = 1; Subphr_bg_rm_Ts(Subphr_bg_rm_Ts < -1) = -1;
 end
-%% cal phr used Ps: P1 and P2
+
+%% 使用点积计算相位延迟: 计算相邻点在垂直于光轴平面上的投影
 function [Subphr_bg_rm_Ps] = ddgPsPhr(ps_bg_rm,B_bg_rm)
 % 3D points
 % LA
@@ -251,7 +360,7 @@ function [Subphr_bg_rm_Ps] = ddgPsPhr(ps_bg_rm,B_bg_rm)
     Subphr_bg_rm_Ps(Subphr_bg_rm_Ps > 1) = 1; Subphr_bg_rm_Ps(Subphr_bg_rm_Ps < -1) = -1;
 end
 
-%% filt cumLA
+%% 光轴滤波函数: 对3D光轴向量进行高斯滤波并重新标准化
 function [loaxis3] = LAgFfilt(loaxis2,h2)
     Temp_ax1(:,:)=loaxis2(:,:,1);
     Temp_ax2(:,:)=loaxis2(:,:,2);
@@ -268,7 +377,9 @@ function [loaxis3] = LAgFfilt(loaxis2,h2)
     Temp_ax1(isnan(Temp_ax1)) = 0;    Temp_ax2(isnan(Temp_ax2)) = 0;    Temp_ax3(isnan(Temp_ax3)) = 0;
     loaxis3=cat(3,Temp_ax1,Temp_ax2,Temp_ax3);
 end
-%% rot to achieve drLA
+
+%% 深度分辨率转换函数: 将累积光轴转换为深度分辨率光轴
+% 从组织表面开始，逐步"展开"累积的双折射效应
 function [axiss2] = drLA(loaxis22,phR_gF,rotationVector2)
 
 for j=1:size(loaxis22,2)
@@ -294,4 +405,29 @@ for j=1:size(loaxis22,2)
     end
 end
 
+end
+
+%% 根据信噪比计算动态圆盘直径: 基于DOPU值动态调整拟合点数
+% 输入: dopu_val - DOPU值(信噪比指标), max_Avnum - 最大允许的Avnum
+% 输出: dynamic_Avnum - 根据信噪比调整后的Avnum
+% 新逻辑: 根据信噪比设置最小Avnum阈值，确保半径不会太小导致延迟过大
+%        同时在阈值范围内根据SNR选择合适的Avnum
+function [dynamic_Avnum] = calculateDynamicAvnum(dopu_val, max_Avnum)
+    % DOPU阈值设置
+    dopu_thresholds = [0.3, 0.5, 0.7];  % DOPU阈值从低到高
+
+    % 根据信噪比设置最小Avnum阈值，防止半径太小导致延迟过大
+    if dopu_val < dopu_thresholds(1)
+        min_Avnum = 5;  % 信噪比很低时设置较大最小值，避免延迟过大
+        dynamic_Avnum = max(min_Avnum, max_Avnum);  % 使用最大值但不低于最小阈值
+    elseif dopu_val < dopu_thresholds(2)
+        min_Avnum = 4;  % 信噪比中等时设置中等最小值
+        dynamic_Avnum = max(min_Avnum, max_Avnum - 2);  % 使用中等值但不低于最小阈值
+    elseif dopu_val < dopu_thresholds(3)
+        min_Avnum = 3;  % 信噪比良好时设置小最小值
+        dynamic_Avnum = max(min_Avnum, max_Avnum - 4);  % 使用较小值但不低于最小阈值
+    else
+        min_Avnum = 3;  % 信噪比很好时使用最小阈值
+        dynamic_Avnum = max(min_Avnum, 3);  % 使用最小值但不低于阈值
+    end
 end

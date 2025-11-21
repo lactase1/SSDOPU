@@ -17,7 +17,7 @@ params = struct();
 
 %% ========== TIFF生成控制参数 ==========
 params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
-params.tiff.tiff_frame = 270;     % 要提取的帧号(默认160，即中间帧)
+params.tiff.tiff_frame = 35;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
 %% ========== 基础处理参数 ==========
@@ -25,11 +25,11 @@ params.processing.disp_coef = -20.1;           % 色散补偿系数
 params.processing.do_PhComp = 1;               % 是否进行相位补偿 (1:开启, 0:关闭)
 params.processing.do_medianshift = 1;          % 是否进行中值偏移校正
 params.processing.do_reg = 0;                  % 是否进行帧间配准(运动去除)
-params.processing.useref = 1;                  % 参考信号模式 (1:使用前50k A-line, 0:使用背景, -1:不使用)
+params.processing.useref = 0;                  % 参考信号模式 (1:使用前50k A-line, 0:使用背景, -1:不使用)
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
-params.processing.hasSeg = 12;                  % 是否已有分割结果(.mat文件)
-params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
+params.processing.max_frames = 35;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 
 %% ========== 并行处理设置 ==========
@@ -63,8 +63,7 @@ params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂�
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置
-params.polarization.Avnum_initial = 7;         % 初始平均层数(适当减小以提高分辨率)
-params.polarization.Avnum = 4;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum = 3;                 % DDG测试用平均层数(统一使用以保持一致性)
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
 % 调整为更适合巩膜结构特征的范围
@@ -87,7 +86,7 @@ params.filters.h1 = fspecial('gaussian', params.filters.h1_size, params.filters.
 
 % 中尺度高斯核 (用于结构增强和背景平滑) - 优化版
 params.filters.h2_size = [15 15];              % 高斯核2尺寸 (适当增大以增强结构连续性)
-params.filters.h2_sigma = 6.0;                 % 高斯核2标准差 (提高以更好平滑背景)
+params.filters.h2_sigma = 4;                 % 高斯核2标准差 (提高以更好平滑背景)
 params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
 
 % （已删除若干未使用的注释/备用参数，以保持配置简洁）
