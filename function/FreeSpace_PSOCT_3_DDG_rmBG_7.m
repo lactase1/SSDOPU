@@ -41,7 +41,7 @@
 %   LA_raw, PhR_raw, cumLA_raw: 原始结果(无背景校正)
 % ============================================================================
 
-function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(Qm,Um,Vm,Stru,test_seg_top,h1,h2,Avnum,dopu_splitSpec_M)
+function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(Qm,Um,Vm,Stru,test_seg_top,h1,h2,Avnum)
 showimg = 0;
 
 
@@ -102,9 +102,8 @@ phd=zeros(size(SmapF1,1),size(SmapF1,2));
 for j=1:size(SmapF1,2)  % X方向循环
     dirCheck = 1;
     for i=1:size(SmapF1,1)-3  % 深度方向循环(最小Avnum=3，避免越界)
-        % 根据信噪比(DOPU值)动态计算合适的圆盘直径
-        current_dopu = dopu_splitSpec_M(i,j);
-        dynamic_Avnum = calculateDynamicAvnum(current_dopu, Avnum);
+        % 使用固定Avnum
+        dynamic_Avnum = Avnum;
         
         % 确保不会越界
         max_possible_i = size(SmapF1,1) - dynamic_Avnum;
@@ -407,27 +406,4 @@ end
 
 end
 
-%% 根据信噪比计算动态圆盘直径: 基于DOPU值动态调整拟合点数
-% 输入: dopu_val - DOPU值(信噪比指标), max_Avnum - 最大允许的Avnum
-% 输出: dynamic_Avnum - 根据信噪比调整后的Avnum
-% 新逻辑: 根据信噪比设置最小Avnum阈值，确保半径不会太小导致延迟过大
-%        同时在阈值范围内根据SNR选择合适的Avnum
-function [dynamic_Avnum] = calculateDynamicAvnum(dopu_val, max_Avnum)
-    % DOPU阈值设置
-    dopu_thresholds = [0.3, 0.5, 0.7];  % DOPU阈值从低到高
 
-    % 根据信噪比设置最小Avnum阈值，防止半径太小导致延迟过大
-    if dopu_val < dopu_thresholds(1)
-        min_Avnum = 5;  % 信噪比很低时设置较大最小值，避免延迟过大
-        dynamic_Avnum = max(min_Avnum, max_Avnum);  % 使用最大值但不低于最小阈值
-    elseif dopu_val < dopu_thresholds(2)
-        min_Avnum = 4;  % 信噪比中等时设置中等最小值
-        dynamic_Avnum = max(min_Avnum, max_Avnum - 2);  % 使用中等值但不低于最小阈值
-    elseif dopu_val < dopu_thresholds(3)
-        min_Avnum = 3;  % 信噪比良好时设置小最小值
-        dynamic_Avnum = max(min_Avnum, max_Avnum - 4);  % 使用较小值但不低于最小阈值
-    else
-        min_Avnum = 3;  % 信噪比很好时使用最小阈值
-        dynamic_Avnum = max(min_Avnum, 3);  % 使用最小值但不低于阈值
-    end
-end
