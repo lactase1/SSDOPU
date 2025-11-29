@@ -20,7 +20,7 @@ end
 
 % 设置数据路径
 data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT';
-output_base = 'D:\1-Liu Jian\yongxin.wang\tmp';
+output_base = 'D:\1-Liu Jian\yongxin.wang\tmp\DDG1';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -336,7 +336,7 @@ function rPSOCT_process_single_file(varargin)
         IMG_ch2 = squeeze(mean(IMG2_wholeStr, 3));
         [LA_c_cfg1_avg(:, :, :, iY), PhR_c_cfg1_avg(:, :, iY), cumLA_cfg1_avg(:, :, :, iY), ...
             LA_Ms_cfg1_rmBG(:, :, :, iY), PhR_Ms_cfg1_rmBG(:, :, iY), cumLA_Ms_cfg1_rmBG(:, :, :, iY)] = ...
-            calLAPhRALL(IMG_ch1, IMG_ch2, topLines(:, iY), dopu_splitSpec_M, params.polarization.kRL_cfg1, params.polarization.kRU_cfg1, params.filters.h1, params.filters.h2, params.polarization.Avnum, params.mode.wovWinF);
+            calLAPhRALL(IMG_ch1, IMG_ch2, topLines(:, iY), dopu_splitSpec_M, params.polarization.kRL_cfg1, params.polarization.kRU_cfg1, params.filters.h1, params.filters.h2, params.polarization.Avnum, params.mode.wovWinF, params.polarization.enableDopuPhaseSupp);
             fclose(fid);
         end
     end
@@ -384,7 +384,7 @@ function rPSOCT_process_single_file(varargin)
 
         % 对1-4 DOPU图像应用阈值过滤
         dopu_thresholded = dopu_splitSpectrum;
-        dopu_thresholded(dopu_thresholded <= 0.5) = 0;  % 小于等于0.5的设为0
+        dopu_thresholded(dopu_thresholded <= 0.55) = 0;  % 小于等于0.5的设为0
 
         dicomwrite(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), [foutputdir, name, '_1-4_dopu_SS.dcm']);
         dicomwrite(uint8(255 * (permute(dopu_with_boundary, [1 2 4 3]))), [foutputdir, name, '_1-5_dopu_SS_with_boundary.dcm']);
@@ -393,7 +393,6 @@ function rPSOCT_process_single_file(varargin)
         if ~params.processing.hasSeg
             save([foutputdir,name, '.mat'],'topLines','czrg');
         end
-        save([foutputdir,'topLines.mat'],'topLines','czrg');
         rotAngle = 440;
         % 仅输出 cfg1 avg 相关结果（当前仅支持 avg 路径）
         PRRrg = [0 0.5];
@@ -624,9 +623,10 @@ end
 %   - 支持两种滤波模式的完整实现
 %   - 用于深入的偏振分析和算法验证
 % ====================================================================================
-function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF)
+function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF,enableDopuPhaseSupp)
     % 处理可选参数
     if nargin < 10, wovWinF = 0; end  % 直接设置wovWinF而不是params.mode.wovWinF
+    if nargin < 11, enableDopuPhaseSupp = 1; end
 
     % 获取数据维度
     [nZ, nX] = size(IMG_ch1);
@@ -672,7 +672,7 @@ function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,t
     end
 
     % 调用核心算法，同时获得处理前后的完整结果
-    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum);
+    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum, dopu_splitSpec_M, enableDopuPhaseSupp);
 end
 
 %% ====================================================================================
