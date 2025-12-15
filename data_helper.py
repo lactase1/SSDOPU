@@ -41,4 +41,4 @@ for key, fullpath in selected.items():
         print(f"复制: {fullpath} -> {dst_path}")
         shutil.copy2(fullpath, dst_path)
 
-print("全部处理完成 ✅")
+print("全部处理完成")

@@ -1,4 +1,4 @@
-function outFrameWfilt = vWinAvgFiltOpt(inFrame,inWeight,kRL,kRU,Nsec)
+ function outFrameWfilt = vWinAvgFiltOpt(inFrame,inWeight,kRL,kRU,Nsec)
     % input params
     % inFrame  ==> 输入
     % inWeight ==> 置信度 (默认0~1)

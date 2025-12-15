@@ -288,6 +288,7 @@ function rPSOCT_process_single_file(varargin)
                 Bd1 = Bs1;
                 Bd2 = Bs2;
             end
+            
         %% split spectrum / spatial / combined DOPU
         if params.dopu.do_combined
             % 使用组合DOPU (分裂谱 + 空间)
@@ -310,6 +311,7 @@ function rPSOCT_process_single_file(varargin)
             [dopu_splitSpectrum(:, :, iY), dopu_ss] = calculateSplitSpectrumDOPU(...
                 Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
         end
+
         %% whole spectrum nZ*nX*nR==> fft(complex)
         Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
         Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
@@ -371,7 +373,58 @@ function rPSOCT_process_single_file(varargin)
         dicomwrite(uint8(255 * (Smap_rep1 / 2 + 0.5)), [foutputdir, name, '_1-3_1rep-Stokes.dcm']);
         dicomwrite(uint8(255 * (Smap_avg / 2 + 0.5)), [foutputdir, name, '_1-3_4rep-Stokes.dcm']);
 
-        % 对DOPU图像应用边界处理
+        %% 生成 En-face (C-scan) 和 Orthogonal B-scan
+        % 确保 Struc 维度为 [Z, X, Y]
+        Struc_3D = squeeze(Struc); 
+        [nZ_out, nX_out, nY_out] = size(Struc_3D);
+
+        % 1. Orthogonal B-scan (Y-Z plane, 沿着慢轴和深度轴)
+        % 选取 X 轴(快轴)中间位置切片
+        x_mid = round(nX_out / 2);
+        if x_mid < 1, x_mid = 1; end
+        ortho_bscan = squeeze(Struc_3D(:, x_mid, :)); % [Z, Y]
+        dicomwrite(uint8(255 * ortho_bscan), [foutputdir, name, '_3-1_Ortho_Bscan_X', num2str(x_mid), '.dcm']);
+
+        % 2. En-face (C-scan, X-Y plane, 平行于样品表面)
+        % 生成所有深度的结构图像 En-face 切面，多帧 DCM
+        fprintf('生成结构图像 En-face 多帧 DCM...\n');
+        en_face_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8'); % [Y, X, 1, Z] for multi-frame
+        for z = 1:nZ_out
+            % 提取当前深度的切片 [X, Y]，然后转置为 [Y, X]
+            en_face = squeeze(Struc_3D(z, :, :))'; % [Y, X]
+            en_face_stack(:, :, 1, z) = uint8(255 * en_face);
+        end
+        dicomwrite(en_face_stack, [foutputdir, name, '_3-2_Enface_Struc_MultiFrame.dcm']);
+
+        % (c) 基于表面分割的 En-face (Flattened C-scan)
+        if exist('topLines', 'var') && ~isempty(topLines)
+             % 生成所有深度的展平切片，从表面开始到结束深度
+             fprintf('生成展平 En-face 多帧 DCM...\n');
+             flattened_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8');
+             for z = 1:nZ_out
+                 en_face_flat = zeros(nY_out, nX_out);
+                 for iy = 1:nY_out
+                     for ix = 1:nX_out
+                         z_pos = round(topLines(ix, iy)) + (z - 1);  % 从表面开始，逐层向下
+                         if z_pos >= 1 && z_pos <= nZ_out
+                             en_face_flat(iy, ix) = Struc_3D(z_pos, ix, iy);
+                         end
+                     end
+                 end
+                 flattened_stack(:, :, 1, z) = uint8(255 * en_face_flat);
+             end
+             dicomwrite(flattened_stack, [foutputdir, name, '_3-3_Enface_Flattened_MultiFrame.dcm']);
+        end
+
+        % 3. DOPU En-face (更可能显示血管)
+        fprintf('生成 DOPU En-face 多帧 DCM...\n');
+        dopu_3D = dopu_splitSpectrum; % [Z, X, Y]
+        dopu_enface_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8');
+        for z = 1:nZ_out
+            dopu_enface = squeeze(dopu_3D(z, :, :))'; % [Y, X]
+            dopu_enface_stack(:, :, 1, z) = uint8(255 * dopu_enface);
+        end
+        dicomwrite(dopu_enface_stack, [foutputdir, name, '_3-4_Enface_DOPU_MultiFrame.dcm']);
         dopu_with_boundary = dopu_splitSpectrum;
         for iY = 1:size(dopu_with_boundary, 3)
             for iX = 1:size(dopu_with_boundary, 2)

@@ -29,7 +29,7 @@ params.processing.useref = 1;                  % 参考信号模式 (1:使用前
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
 params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
-params.processing.max_frames = 35;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 
 %% ========== 并行处理设置 ==========

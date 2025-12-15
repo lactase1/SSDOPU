@@ -9,7 +9,7 @@
 %   背景去除：通过旋转矩阵消除系统性偏振背景。
 
 
-function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp)
+function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw, LA_forced, PhR_forced] = FreeSpace_PSOCT_3_DDG_rmBG_7(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp)
     if nargin < 10
         enableDopuPhaseSupp = true;
     end
@@ -64,6 +64,12 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rm
 
     SmapF = cat(3, QF1, UF1, VF1); % 三维矩阵，每个体素为单位Stokes矢量
     SmapF1 = smoothdata(SmapF, 1, 'movmean', 16); % 深度方向平滑，抑制噪声
+
+    % 强制半径法光轴与相位（DDG平行分支，统一返回供对比）
+    forcedParam.r_min = 0.9; % 最小切圆半径约束（靠近1约束更强）
+    forcedParam.output_depth_forced = max(size(SmapF1, 1) - Avnum, 1); % 与DDG输出深度对齐
+    forcedParam.window_forced_max = Avnum + 1; % 复用当前窗口长度
+    [LA_forced_flat, PhR_forced_flat] = computeFromQUV_Forced(SmapF1, forcedParam);
 
     %% Step 3. DDG法光轴与相位拟合
     % 目的：在Avnum窗口内，利用Stokes矢量变化，估算局部双折射主轴（光轴）和相位延迟。
@@ -270,6 +276,8 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rm
     LA_raw = bfloaxis3D * 0;
     PhR_raw = bfphrr * 0;
     cumLA_raw = bfloaxis3D * 0;
+    LA_forced = bfloaxis3D * 0;
+    PhR_forced = bfphrr * 0;
 
     for j = 1:size(Stru, 2)
         toInd = test_seg_top(j):size(LA, 1);
@@ -280,6 +288,17 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rm
         LA_raw(toInd, j, :) = bfloaxis3D_raw(fromInd, j, :);
         PhR_raw(toInd, j) = bfphrr_raw(fromInd, j);
         cumLA_raw(toInd, j, :) = cumLA_raw_gF(fromInd, j, :);
+        % 强制半径法结果映射回原始曲面坐标
+        if size(LA_forced_flat, 1) >= fromInd(end)
+            LA_forced(toInd, j, :) = LA_forced_flat(fromInd, j, :);
+        else
+            LA_forced(toInd, j, :) = LA_forced_flat(end, j, :);
+        end
+        if size(PhR_forced_flat, 1) >= fromInd(end)
+            PhR_forced(toInd, j) = PhR_forced_flat(fromInd, j);
+        else
+            PhR_forced(toInd, j) = PhR_forced_flat(end, j);
+        end
     end
 end
 
