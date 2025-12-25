@@ -19,8 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'D:\1-Liu Jian\yongxin.wang\PSOCT';
-output_base = 'D:\1-Liu Jian\yongxin.wang\tmp\DDG1';
+data_path   = 'D:\1-Liu Jian/yongxin.wang/Data/Process_Data/Red_Disk';
+% σ * 6 + 1 // σ * 4 + 1
+output_base = 'D:\1-Liu Jian/yongxin.wang/Data/Process_Data/Red_Disk/Output/dopu_19layer_5_31';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -84,7 +85,7 @@ function rPSOCT_process_single_file(varargin)
     if nargin >= 2
         output_base = varargin{2};
     else
-        output_base = 'D:\1-Liu Jian\yongxin.wang\PSOCT\2025-9-19\ssdopu-kRL_16-kRU_23';
+        output_base = 'D:1-Liu Jianyongxin.wang	mpplanefit_21layers';
     end
 
     % 检查输入文件是否存在
@@ -103,6 +104,129 @@ function rPSOCT_process_single_file(varargin)
     %% (2) 初始化参数
     % 加载参数
     params = config_params();
+    % 是否由本函数启动并行池的标志（默认为 false）
+    poolStartedHere = false;
+
+    % 如果输出路径名遵循 'dopu_<N>layer[_<sigma>_<size>]' 约定，则从路径解析并覆盖部分参数
+    try
+        [~, outbase_name, ~] = fileparts(output_base);
+        % 根据输出目录名决定滤波模式：包含 'dopu' 则使用自适应DOPU (wovWinF = 0)，否则（例如 DDG）切换到固定高斯 (wovWinF = 1)
+        if contains(outbase_name, 'dopu', 'IgnoreCase', true)
+            params.mode.wovWinF = 0; % 自适应DOPU
+            fprintf('输出目录包含 "dopu"，设置 params.mode.wovWinF = 0 (自适应DOPU)\n');
+        else
+            params.mode.wovWinF = 1; % 固定高斯 / DDG 场景
+            fprintf('输出目录不包含 "dopu"，设置 params.mode.wovWinF = 1 (固定高斯 / DDG)\n');
+        end
+        % 先尝试匹配以 'dopu_' 开头的格式，再退回到通用 '<N>layer[_sigma_size]' 格式
+        tok = regexp(outbase_name, 'dopu_(\d+)layer(?:_([\d\.]+)_([\d]+))?', 'tokens', 'once');
+        pattern_used = '';
+        if ~isempty(tok)
+            t = tok; pattern_used = 'dopu_(N)layer[_sigma_size]';
+        else
+            tok = regexp(outbase_name, '(\d+)layer(?:_([\d\.]+)_([\d]+))?', 'tokens', 'once');
+            if ~isempty(tok)
+                t = tok; pattern_used = '(N)layer[_sigma_size]';
+            else
+                t = {};
+            end
+        end
+        if ~isempty(t)
+            fprintf('解析到 tokens (%s): %s\n', pattern_used, strjoin(t, ', '));
+            updates = struct();
+            wrote_any = false;
+            % Avnum
+            if numel(t) >= 1 && ~isempty(strtrim(t{1}))
+                newAv = str2double(strtrim(t{1}));
+                params.polarization.Avnum = newAv;
+                updates.polarization.Avnum = newAv;
+                fprintf('解析输出目录名 -> Avnum = %d\n', params.polarization.Avnum);
+                wrote_any = true;
+            end
+            % h2 sigma and size
+            if numel(t) >= 3 && ~isempty(strtrim(t{2})) && ~isempty(strtrim(t{3}))
+                newSigma = str2double(strtrim(t{2}));
+                sz = str2double(strtrim(t{3}));
+                params.filters.h2_sigma = newSigma;
+                params.filters.h2_size = [sz sz];
+                % 重新生成高斯核
+                params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
+                updates.filters.h2_sigma = params.filters.h2_sigma;
+                updates.filters.h2_size = params.filters.h2_size;
+                fprintf('解析输出目录名 -> h2_sigma = %g, h2_size = [%d %d]\n', params.filters.h2_sigma, sz, sz);
+                wrote_any = true;
+            end
+
+            % 后备解析: 如果没有解析到 h2_sigma/h2_size，则尝试按下划线分割查找纯数字字段
+            if (~isfield(updates,'filters') || ~isfield(updates.filters,'h2_sigma'))
+                parts = strsplit(outbase_name, '_');
+                numtokens = {};
+                for pi = 1:numel(parts)
+                    % 跳过包含 'layer' 的部分
+                    if isempty(regexp(parts{pi}, '\d+layer', 'once'))
+                        if ~isempty(regexp(parts{pi}, '^\d+(\.\d+)?$', 'once'))
+                            numtokens{end+1} = parts{pi};
+                        end
+                    end
+                end
+                if numel(numtokens) >= 2
+                    % 第一个数字作为 sigma，第二个数字作为 size
+                    newSigma = str2double(numtokens{1});
+                    sz = str2double(numtokens{2});
+                    params.filters.h2_sigma = newSigma;
+                    params.filters.h2_size = [sz sz];
+                    params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
+                    updates.filters.h2_sigma = params.filters.h2_sigma;
+                    updates.filters.h2_size = params.filters.h2_size;
+                    fprintf('后备解析输出目录 -> h2_sigma = %g, h2_size = [%d %d]\n', newSigma, sz, sz);
+                    wrote_any = true;
+                end
+            end
+
+            % 如果解析到任意要写回的配置，则尝试写回并验证
+            if wrote_any
+                try
+                    cfg_file = fullfile(fileparts(mfilename('fullpath')), 'function', 'config_params.m');
+                    overwrite_config_params(updates, cfg_file);
+
+                    % 读取写回后的文件并校验（使用简单子字符串匹配以避免正则转义问题）
+                    cfg_text = fileread(cfg_file);
+                    % 验证 Avnum
+                    if isfield(updates, 'polarization') && isfield(updates.polarization, 'Avnum')
+                        expected = sprintf('params.polarization.Avnum = %d;', updates.polarization.Avnum);
+                        if contains(cfg_text, expected)
+                            fprintf('已确认写回: %s\n', expected);
+                        else
+                            warning('写回验证失败: %s 未在 %s 中更新', expected, cfg_file);
+                        end
+                    end
+                    % 验证 h2_sigma 和 h2_size
+                    if isfield(updates, 'filters') && isfield(updates.filters, 'h2_sigma')
+                        expected_s = sprintf('params.filters.h2_sigma = %g;', updates.filters.h2_sigma);
+                        if contains(cfg_text, expected_s)
+                            fprintf('已确认写回: %s\n', expected_s);
+                        else
+                            warning('写回验证失败: %s 未在 %s 中更新', expected_s, cfg_file);
+                        end
+                    end
+                    if isfield(updates, 'filters') && isfield(updates.filters, 'h2_size')
+                        expected_sz = sprintf('params.filters.h2_size = [%d %d];', updates.filters.h2_size(1), updates.filters.h2_size(2));
+                        if contains(cfg_text, expected_sz)
+                            fprintf('已确认写回: %s\n', expected_sz);
+                        else
+                            warning('写回验证失败: %s 未在 %s 中更新', expected_sz, cfg_file);
+                        end
+                    end
+                catch ME
+                    warning('写回配置至 config_params.m 失败: %s', ME.message);
+                end
+            else
+                fprintf('没有从输出目录解析到需要写回的配置项，跳过写回。\n');
+            end
+        end
+    catch ME
+        warning('解析 output_base 名称失败: %s', ME.message);
+    end
 
     % 启动并行池（安全版）
     % - 不再硬编码 worker 数
@@ -122,6 +246,8 @@ function rPSOCT_process_single_file(varargin)
             end
             fprintf('尝试启动并行池 (local)，使用 %d 个 worker...\n', targetWorkers);
             parpool(c_local, targetWorkers);
+            % 标记为本函数已启动并行池
+            poolStartedHere = true;
         catch ME
             if isfield(ME, 'identifier') && ~isempty(ME.identifier)
                 warning(ME.identifier, '%s\n将改为串行执行。', ME.message);
@@ -222,11 +348,7 @@ function rPSOCT_process_single_file(varargin)
 
     %(b) Calculates the Cumulative Stokes parameters I,Q,U,V
     for nr = nR
-        if params.range.setZrg
-            foutputdir = fullfile(output_base, [name, '.rep', num2str(nr), 'fastZ_testDDG', num2str(params.range.setZrg), '\']);
-        else
-            foutputdir = fullfile(output_base, [name, '.rep', num2str(nr), 'DDG_corr3_wobg_test\']);
-        end
+        foutputdir = output_base;
         if ~exist(foutputdir, 'dir'), mkdir(foutputdir); end
 
         czrg = 1:320; % set z range
@@ -254,12 +376,12 @@ function rPSOCT_process_single_file(varargin)
         nZcrop = numel(czrg);
         nZ = nZcrop;
         % (c) creat array to store results
-        LA_c_cfg1_avg = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
-        PhR_c_cfg1_avg = zeros(nZcrop - params.polarization.Avnum, nX, nY);
-        cumLA_cfg1_avg = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
-        LA_c_cfg1_eig = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
-        PhR_c_cfg1_eig = zeros(nZcrop - params.polarization.Avnum, nX, nY);
-        cumLA_cfg1_eig = zeros(nZcrop - params.polarization.Avnum, nX, 3, nY);
+        LA_c_cfg1_avg = zeros(nZcrop - 20, nX, 3, nY);
+        PhR_c_cfg1_avg = zeros(nZcrop - 20, nX, nY);
+        cumLA_cfg1_avg = zeros(nZcrop - 20, nX, 3, nY);
+        LA_c_cfg1_eig = zeros(nZcrop - 20, nX, 3, nY);
+        % PhR_c_cfg1_eig = zeros(nZcrop - 20, nX, nY);
+        % cumLA_cfg1_eig = zeros(nZcrop - 20, nX, 3, nY);
 
         LA_Ms_cfg1_rmBG = LA_c_cfg1_avg;
         PhR_Ms_cfg1_rmBG = cumLA_cfg1_avg;
@@ -270,77 +392,105 @@ function rPSOCT_process_single_file(varargin)
         Stru_OAC = Strus;
         dopu_splitSpectrum = zeros(numel(czrg), nX, nY);
         fprintf('开始处理 %d 个B-Scan...\n', nY);
-        parfor iY = 1:nY % Bscan number (parfor不支持指定步长)
-            Bs1 = zeros(Blength, nX, nr);
-            Bs2 = zeros(Blength, nX, nr);
-            fid = fopen(filename);
-            fseek(fid, bob + (SPL * nX * 2 + 2) * 2 * (nR * (iY - 1)), 'bof');
-            for Ic = 1:nr
-                fseek(fid, 4, 'cof');  % 4byte =2 int16
-                B = double(reshape(fread(fid, SPL * nX * 2, 'int16'), [SPL, nX * 2]));
-                Bs1(:, :, Ic) = (B(:, 1:nX) - Ref_ch1);
-                Bs2(:, :, Ic) = (B(:, nX + 1:end) - Ref_ch2);
-            end
-            if params.processing.do_PhComp == 1
-                Bd1 = real(hilbert(Bs1) .* phV);  % dispersion correction
-                Bd2 = real(hilbert(Bs2) .* phV);
-            else
-                Bd1 = Bs1;
-                Bd2 = Bs2;
-            end
-            
-        %% split spectrum / spatial / combined DOPU
-        if params.dopu.do_combined
-            % 使用组合DOPU (分裂谱 + 空间)
-            dopu_splitSpectrum(:, :, iY) = calculateCombinedDOPU(...
-                Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
-            % 为后续处理创建dopu_ss变量（组合DOPU没有多重复平均，所以用单重复）
-            dopu_ss = dopu_splitSpectrum(:, :, iY);
-        elseif params.dopu.do_spatial
-            % 使用空间DOPU
-            % 需要先计算FFT结果
-            Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
-            Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
-            IMG1_wholeStr = Bimg1_wholeStr(czrg, :, :);
-            IMG2_wholeStr = Bimg2_wholeStr(czrg, :, :);
-            dopu_splitSpectrum(:, :, iY) = calculateSpatialDOPU(IMG1_wholeStr, IMG2_wholeStr, params);
-            % 为后续处理创建dopu_ss变量（空间DOPU没有多重复平均，所以用单重复）
-            dopu_ss = dopu_splitSpectrum(:, :, iY);
+        % 预加载或分批加载数据以避免并行 I/O 竞争
+        estimatedBytes = 8 * Blength * nX * nr * nY * 2; % bytes (估计：两个 double 数组)
+        estGB = estimatedBytes / (1024^3);
+        if isfield(params, 'parallel') && isfield(params.parallel, 'maxMemGB')
+            maxMemGB = params.parallel.maxMemGB;
         else
-            % 使用分裂谱DOPU (默认)
-            [dopu_splitSpectrum(:, :, iY), dopu_ss] = calculateSplitSpectrumDOPU(...
-                Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+            maxMemGB = 6; % 默认 6 GB
+        end
+        % 配置日志等级（0=静默,1=简短,2=详尽）
+        if exist('verbose', 'var') == 0
+            if isfield(params, 'logging') && isfield(params.logging, 'verbose')
+                verbose = params.logging.verbose;
+            elseif isfield(params, 'processing') && isfield(params.processing, 'verbose')
+                verbose = params.processing.verbose;
+            else
+                verbose = 0; % 默认静默
+            end
         end
 
-        %% whole spectrum nZ*nX*nR==> fft(complex)
-        Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
-        Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
-        IMG1_wholeStr = Bimg1_wholeStr(czrg, :, :);
-        IMG2_wholeStr = Bimg2_wholeStr(czrg, :, :);
+            if verbose > 0, fprintf('预加载数据到内存 (%.2f GB) ...\n', estGB); end
+            fid_read = fopen(filename);
+            all_Bs1 = zeros(Blength, nX, nr, nY);
+            all_Bs2 = zeros(Blength, nX, nr, nY);
+            t_load = tic;
+            for iYidx = 1:nY
+                fseek(fid_read, bob + (SPL * nX * 2 + 2) * 2 * (nR * (iYidx - 1)), 'bof');
+                for Ic = 1:nr
+                    fseek(fid_read, 4, 'cof');
+                    B = double(reshape(fread(fid_read, SPL * nX * 2, 'int16'), [SPL, nX * 2]));
+                    all_Bs1(:, :, Ic, iYidx) = (B(:, 1:nX) - Ref_ch1);
+                    all_Bs2(:, :, Ic, iYidx) = (B(:, nX + 1:end) - Ref_ch2);
+                end
+            end
+            loadTime = toc(t_load);
+            fclose(fid_read);
+            if verbose > 0, fprintf('预加载完成，耗时: %.2f 秒。\n', loadTime); end
 
-        %% Struc Stokes, and OAC
-        [wS0, wS1, wS2, wS3] = cumulativeQUV(IMG1_wholeStr, IMG2_wholeStr);
-        wQ = wS1 ./ wS0;
-        wU = wS2 ./ wS0;
-        wV = wS3 ./ wS0;
-        strLin = mean(wS0, 3);
-        Strus(:, :, iY) = 20 * log10(strLin);
-        Smap_avg(:, :, :, iY) = cat(3, mean(wQ, 3), mean(wU, 3), mean(wV, 3));
-        Smap_rep1(:, :, :, iY) = cat(3, wQ(:, :, 1), wU(:, :, 1), wV(:, :, 1));
-        if ~params.processing.hasSeg
-            strOAC = calOAC(strLin); 
-            topLines(:, iY) = surf_seg(strOAC, 0.25) + 2; 
-        end
-        %% drLA and drPhR
-        % 仅保留单一配置（默认 avg），始终执行 cfg1 avg 路径
-        dopu_splitSpec_M = squeeze(mean(dopu_ss, 3)); %% dopu across the different repeat(nR)
-        IMG_ch1 = squeeze(mean(IMG1_wholeStr, 3));
-        IMG_ch2 = squeeze(mean(IMG2_wholeStr, 3));
-        [LA_c_cfg1_avg(:, :, :, iY), PhR_c_cfg1_avg(:, :, iY), cumLA_cfg1_avg(:, :, :, iY), ...
-            LA_Ms_cfg1_rmBG(:, :, :, iY), PhR_Ms_cfg1_rmBG(:, :, iY), cumLA_Ms_cfg1_rmBG(:, :, :, iY)] = ...
-            calLAPhRALL(IMG_ch1, IMG_ch2, topLines(:, iY), dopu_splitSpec_M, params.polarization.kRL_cfg1, params.polarization.kRU_cfg1, params.filters.h1, params.filters.h2, params.polarization.Avnum, params.mode.wovWinF, params.polarization.enableDopuPhaseSupp);
-            fclose(fid);
-        end
+            parfor iY = 1:nY % Bscan number (parfor不支持指定步长)
+                Bs1 = squeeze(all_Bs1(:, :, :, iY));
+                Bs2 = squeeze(all_Bs2(:, :, :, iY));
+                if params.processing.do_PhComp == 1
+                    Bd1 = real(hilbert(Bs1) .* phV);  % dispersion correction
+                    Bd2 = real(hilbert(Bs2) .* phV);
+                else
+                    Bd1 = Bs1;
+                    Bd2 = Bs2;
+                end
+
+                %% split spectrum / spatial / combined DOPU
+                if params.dopu.do_combined
+                    % 使用组合DOPU (分裂谱 + 空间)
+                    dopu_splitSpectrum(:, :, iY) = calculateCombinedDOPU(...
+                        Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+                    % 为后续处理创建dopu_ss变量（组合DOPU没有多重复平均，所以用单重复）
+                    dopu_ss = dopu_splitSpectrum(:, :, iY);
+                elseif params.dopu.do_spatial
+                    % 使用空间DOPU
+                    % 需要先计算FFT结果
+                    Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
+                    Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
+                    IMG1_wholeStr = Bimg1_wholeStr(czrg, :, :);
+                    IMG2_wholeStr = Bimg2_wholeStr(czrg, :, :);
+                    dopu_splitSpectrum(:, :, iY) = calculateSpatialDOPU(IMG1_wholeStr, IMG2_wholeStr, params);
+                    % 为后续处理创建dopu_ss变量（空间DOPU没有多重复平均，所以用单重复）
+                    dopu_ss = dopu_splitSpectrum(:, :, iY);
+                else
+                    % 使用分裂谱DOPU (默认)
+                    [dopu_splitSpectrum(:, :, iY), dopu_ss] = calculateSplitSpectrumDOPU(...
+                        Bd1, Bd2, params, SPL, nX, nr, nWin, windex, winL, winG, czrg);
+                end
+
+                %% whole spectrum nZ*nX*nR==> fft(complex)
+                Bimg1_wholeStr = fft(Bd1 .* winG_whole, SPL, 1);
+                Bimg2_wholeStr = fft(Bd2 .* winG_whole, SPL, 1);
+                IMG1_wholeStr = Bimg1_wholeStr(czrg, :, :);
+                IMG2_wholeStr = Bimg2_wholeStr(czrg, :, :);
+ 
+                %% Struc Stokes, and OAC
+                [wS0, wS1, wS2, wS3] = cumulativeQUV(IMG1_wholeStr, IMG2_wholeStr);
+                wQ = wS1 ./ wS0;
+                wU = wS2 ./ wS0;
+                wV = wS3 ./ wS0;
+                strLin = mean(wS0, 3);
+                Strus(:, :, iY) = 20 * log10(strLin);
+                Smap_avg(:, :, :, iY) = cat(3, mean(wQ, 3), mean(wU, 3), mean(wV, 3));
+                Smap_rep1(:, :, :, iY) = cat(3, wQ(:, :, 1), wU(:, :, 1), wV(:, :, 1));
+                if ~params.processing.hasSeg
+                    strOAC = calOAC(strLin); 
+                    topLines(:, iY) = surf_seg(strOAC, 0.25) + 2; 
+                end
+                %% drLA and drPhR
+                % 仅保留单一配置（默认 avg），始终执行 cfg1 avg 路径
+                dopu_splitSpec_M = squeeze(mean(dopu_ss, 3)); %% dopu across the different repeat(nR)
+                IMG_ch1 = squeeze(mean(IMG1_wholeStr, 3));
+                IMG_ch2 = squeeze(mean(IMG2_wholeStr, 3));
+                [LA_c_cfg1_avg(:, :, :, iY), PhR_c_cfg1_avg(:, :, iY), cumLA_cfg1_avg(:, :, :, iY), ...
+                    LA_Ms_cfg1_rmBG(:, :, :, iY), PhR_Ms_cfg1_rmBG(:, :, iY), cumLA_Ms_cfg1_rmBG(:, :, :, iY)] = ...
+            calLAPhRALL(IMG_ch1, IMG_ch2, topLines(:, iY), dopu_splitSpec_M, params.polarization.kRL_cfg1, params.polarization.kRU_cfg1, params.filters.h1, params.filters.h2, params.polarization.Avnum, params.mode.wovWinF, params.polarization.enableDopuPhaseSupp, verbose);
+            end % parfor end
     end
     fclose all;
     %% save results: strus(flow),stokes,oac
@@ -356,7 +506,8 @@ function rPSOCT_process_single_file(varargin)
             Struc(:, :, :, i) = (SS1 - strLrg) ./ (strUrg - strLrg);
         end
         % 保存原始结构图像
-        dicomwrite(uint8(255 * (Struc)), [foutputdir, name, '_1-1_Struc.dcm']);
+        % 修复 DCM 文件路径拼接，确保使用 fullfile
+        dicomwrite(uint8(255 * (Struc)), fullfile(foutputdir, [name, '_1-1_Struc.dcm']));
 
         % 创建带边界的结构图像副本
         Struc_with_boundary = Struc;
@@ -369,87 +520,25 @@ function rPSOCT_process_single_file(varargin)
                 end
             end
         end
-        dicomwrite(uint8(255 * (Struc_with_boundary)), [foutputdir, name, '_1-2_Struc_with_boundary.dcm']);
-        dicomwrite(uint8(255 * (Smap_rep1 / 2 + 0.5)), [foutputdir, name, '_1-3_1rep-Stokes.dcm']);
-        dicomwrite(uint8(255 * (Smap_avg / 2 + 0.5)), [foutputdir, name, '_1-3_4rep-Stokes.dcm']);
-
-        %% 生成 En-face (C-scan) 和 Orthogonal B-scan
-        % 确保 Struc 维度为 [Z, X, Y]
-        Struc_3D = squeeze(Struc); 
-        [nZ_out, nX_out, nY_out] = size(Struc_3D);
-
-        % 1. Orthogonal B-scan (Y-Z plane, 沿着慢轴和深度轴)
-        % 选取 X 轴(快轴)中间位置切片
-        x_mid = round(nX_out / 2);
-        if x_mid < 1, x_mid = 1; end
-        ortho_bscan = squeeze(Struc_3D(:, x_mid, :)); % [Z, Y]
-        dicomwrite(uint8(255 * ortho_bscan), [foutputdir, name, '_3-1_Ortho_Bscan_X', num2str(x_mid), '.dcm']);
-
-        % 2. En-face (C-scan, X-Y plane, 平行于样品表面)
-        % 生成所有深度的结构图像 En-face 切面，多帧 DCM
-        fprintf('生成结构图像 En-face 多帧 DCM...\n');
-        en_face_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8'); % [Y, X, 1, Z] for multi-frame
-        for z = 1:nZ_out
-            % 提取当前深度的切片 [X, Y]，然后转置为 [Y, X]
-            en_face = squeeze(Struc_3D(z, :, :))'; % [Y, X]
-            en_face_stack(:, :, 1, z) = uint8(255 * en_face);
-        end
-        dicomwrite(en_face_stack, [foutputdir, name, '_3-2_Enface_Struc_MultiFrame.dcm']);
-
-        % (c) 基于表面分割的 En-face (Flattened C-scan)
-        if exist('topLines', 'var') && ~isempty(topLines)
-             % 生成所有深度的展平切片，从表面开始到结束深度
-             fprintf('生成展平 En-face 多帧 DCM...\n');
-             flattened_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8');
-             for z = 1:nZ_out
-                 en_face_flat = zeros(nY_out, nX_out);
-                 for iy = 1:nY_out
-                     for ix = 1:nX_out
-                         z_pos = round(topLines(ix, iy)) + (z - 1);  % 从表面开始，逐层向下
-                         if z_pos >= 1 && z_pos <= nZ_out
-                             en_face_flat(iy, ix) = Struc_3D(z_pos, ix, iy);
-                         end
-                     end
-                 end
-                 flattened_stack(:, :, 1, z) = uint8(255 * en_face_flat);
-             end
-             dicomwrite(flattened_stack, [foutputdir, name, '_3-3_Enface_Flattened_MultiFrame.dcm']);
-        end
-
-        % 3. DOPU En-face (更可能显示血管)
-        fprintf('生成 DOPU En-face 多帧 DCM...\n');
-        dopu_3D = dopu_splitSpectrum; % [Z, X, Y]
-        dopu_enface_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8');
-        for z = 1:nZ_out
-            dopu_enface = squeeze(dopu_3D(z, :, :))'; % [Y, X]
-            dopu_enface_stack(:, :, 1, z) = uint8(255 * dopu_enface);
-        end
-        dicomwrite(dopu_enface_stack, [foutputdir, name, '_3-4_Enface_DOPU_MultiFrame.dcm']);
-        dopu_with_boundary = dopu_splitSpectrum;
-        for iY = 1:size(dopu_with_boundary, 3)
-            for iX = 1:size(dopu_with_boundary, 2)
-                surface_pos = round(topLines(iX, iY));
-                if surface_pos > 1 && surface_pos <= size(dopu_with_boundary, 1)
-                    dopu_with_boundary(1:surface_pos-1, iX, iY) = 0;  % 边界以上的部分设为黑色
-                end
-            end
-        end
+        dicomwrite(uint8(255 * (Struc_with_boundary)), fullfile(foutputdir, [name, '_1-2_Struc_with_boundary.dcm']));
+        dicomwrite(uint8(255 * (Smap_rep1 / 2 + 0.5)), fullfile(foutputdir, [name, '_1-3_1rep-Stokes.dcm']));
+        dicomwrite(uint8(255 * (Smap_avg / 2 + 0.5)), fullfile(foutputdir, [name, '_1-3_4rep-Stokes.dcm']));
 
         % 对1-4 DOPU图像应用阈值过滤
         dopu_thresholded = dopu_splitSpectrum;
-        dopu_thresholded(dopu_thresholded <= 0.55) = 0;  % 小于等于0.5的设为0
+        dopu_thresholded(dopu_thresholded <= 0.45) = 0;  % 小于等于0.5的设为0
 
-        dicomwrite(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), [foutputdir, name, '_1-4_dopu_SS.dcm']);
-        dicomwrite(uint8(255 * (permute(dopu_with_boundary, [1 2 4 3]))), [foutputdir, name, '_1-5_dopu_SS_with_boundary.dcm']);
+        dicomwrite(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), fullfile(foutputdir, [name, '_1-4_dopu_SS.dcm']));
+        % dicomwrite(uint8(255 * (permute(dopu_with_boundary, [1 2 4 3]))), fullfile(foutputdir, [name, '_1-5_dopu_SS_with_boundary.dcm']));
         
         
         if ~params.processing.hasSeg
-            save([foutputdir,name, '.mat'],'topLines','czrg');
+            save(fullfile(filepath, [name, '.mat']), 'topLines', 'czrg');
         end
         rotAngle = 440;
         % 仅输出 cfg1 avg 相关结果（当前仅支持 avg 路径）
         PRRrg = [0 0.5];
-        writematrix(PRRrg, [foutputdir, name, '_2-0_PhRRg.txt']);
+        writematrix(PRRrg, fullfile(foutputdir, [name, '_2-0_PhRRg.txt']));
         for iY = 1:nY
             PRRc(:, :, :, iY) = uint8(ind2rgb(uint8(mat2gray(PhR_c_cfg1_avg(:, :, iY), PRRrg) * 256), parula(256)) * 256);
             cumLA_cfg_hsv(:, :, :, iY) = quColoring(cumLA_cfg1_avg(:, :, :, iY), rotAngle);
@@ -459,25 +548,169 @@ function rPSOCT_process_single_file(varargin)
             cumLA_Ms_cfg1_rmBG_hsv(:, :, :, iY) = quColoring(cumLA_Ms_cfg1_rmBG(:, :, :, iY), rotAngle);
             LA_Ms_cfg1_rmBG_hsv(:, :, :, iY) = quColoring(LA_Ms_cfg1_rmBG(:, :, :, iY), rotAngle);
         end
-        dicomwrite(uint8(255 * (cumLA_cfg1_avg / 2 + 0.5)), [foutputdir, name, '_2-1_cumLA-cfg1-', num2str(nr), 'repAvg.dcm']);
-        dicomwrite(uint8(255 * cumLA_cfg_hsv), [foutputdir, name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']);
-        dicomwrite(uint8(255 * (LA_c_cfg1_avg / 2 + 0.5)), [foutputdir, name, '_2-3_drLA-cfg1-', num2str(nr), 'repAvg.dcm']);
-        dicomwrite(uint8(255 * LA_cfg_hsv), [foutputdir, name, '_2-4_drLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']);
-        dicomwrite(PRRc, [foutputdir, name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg.dcm']);
+        dicomwrite(uint8(255 * (cumLA_cfg1_avg / 2 + 0.5)), fullfile(foutputdir, [name, '_2-1_cumLA-cfg1-', num2str(nr), 'repAvg.dcm']));
+        dicomwrite(uint8(255 * cumLA_cfg_hsv), fullfile(foutputdir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
+        dicomwrite(uint8(255 * (LA_c_cfg1_avg / 2 + 0.5)), fullfile(foutputdir, [name, '_2-3_drLA-cfg1-', num2str(nr), 'repAvg.dcm']));
+        dicomwrite(uint8(255 * LA_cfg_hsv), fullfile(foutputdir, [name, '_2-4_drLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
+        dicomwrite(PRRc, fullfile(foutputdir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg.dcm']));
 
-        dicomwrite(uint8(255 * (cumLA_Ms_cfg1_rmBG / 2 + 0.5)), [foutputdir, name, '_2-6_cumLA_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']);
-        dicomwrite(uint8(255 * cumLA_Ms_cfg1_rmBG_hsv), [foutputdir, name, '_2-7_cumLA_rmBG-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']);
-        dicomwrite(uint8(255 * (LA_Ms_cfg1_rmBG / 2 + 0.5)), [foutputdir, name, '_2-8_drLA_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']);
-        dicomwrite(uint8(255 * LA_Ms_cfg1_rmBG_hsv), [foutputdir, name, '_2-9_drLA_rmBG-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']);
-        dicomwrite(PRRc_rmBG, [foutputdir, name, '_2-10_PhR_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']);
+        dicomwrite(uint8(255 * (cumLA_Ms_cfg1_rmBG / 2 + 0.5)), fullfile(foutputdir, [name, '_2-6_cumLA_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']));
+        dicomwrite(uint8(255 * cumLA_Ms_cfg1_rmBG_hsv), fullfile(foutputdir, [name, '_2-7_cumLA_rmBG-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
+        dicomwrite(uint8(255 * (LA_Ms_cfg1_rmBG / 2 + 0.5)), fullfile(foutputdir, [name, '_2-8_drLA_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']));
+        dicomwrite(uint8(255 * LA_Ms_cfg1_rmBG_hsv), fullfile(foutputdir, [name, '_2-9_drLA_rmBG-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
+        dicomwrite(PRRc_rmBG, fullfile(foutputdir, [name, '_2-10_PhR_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']));
     end % save results
+
+
+    %% 生成 En-face (C-scan) 和 Orthogonal B-scan
+    % 确保 Struc 维度为 [Z, X, Y]
+    Struc_3D = squeeze(Struc); 
+    [nZ_out, nX_out, nY_out] = size(Struc_3D);
+
+    % % 1. Orthogonal B-scan (Y-Z plane, 沿着慢轴和深度轴)
+    % % 选取 X 轴(快轴)中间位置切片
+    % x_mid = round(nX_out / 2);
+    % if x_mid < 1, x_mid = 1; end
+    % ortho_bscan = squeeze(Struc_3D(:, x_mid, :)); % [Z, Y]
+    % dicomwrite(uint8(255 * ortho_bscan), fullfile(foutputdir, [name, '_3-1_Ortho_Bscan_X', num2str(x_mid), '.dcm']));
+
+    % % 2. En-face (C-scan, X-Y plane, 平行于样品表面)
+    % % 生成所有深度的结构图像 En-face 切面，多帧 DCM
+    % fprintf('生成结构图像 En-face 多帧 DCM...\n');
+    % en_face_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8'); % [Y, X, 1, Z] for multi-frame
+    % for z = 1:nZ_out
+    %     % 提取当前深度的切片 [X, Y]，然后转置为 [Y, X]
+    %     en_face = squeeze(Struc_3D(z, :, :))'; % [Y, X]
+    %     en_face_stack(:, :, 1, z) = uint8(255 * en_face);
+    % end
+    % dicomwrite(en_face_stack, fullfile(foutputdir, [name, '_3-2_Enface_Struc_MultiFrame.dcm']));
+
+    % (c) 基于表面分割的 En-face (Flattened C-scan)
+    if exist('topLines', 'var') && ~isempty(topLines)
+            % 生成所有深度的展平切片，从表面开始到结束深度
+            fprintf('生成展平 En-face 多帧 DCM...\n');
+            flattened_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8');
+            for z = 1:nZ_out
+                en_face_flat = zeros(nY_out, nX_out);
+                for iy = 1:nY_out
+                    for ix = 1:nX_out
+                        z_pos = round(topLines(ix, iy)) + (z - 1);  % 从表面开始，逐层向下
+                        if z_pos >= 1 && z_pos <= nZ_out
+                            en_face_flat(iy, ix) = Struc_3D(z_pos, ix, iy);
+                        end
+                    end
+                end
+                flattened_stack(:, :, 1, z) = uint8(255 * en_face_flat);
+            end
+            dicomwrite(flattened_stack, fullfile(foutputdir, [name, '_3-3_Enface_Flattened_MultiFrame.dcm']));
+    end
+
+    % % 3. DOPU En-face (更可能显示血管)
+    % fprintf('生成 DOPU En-face 多帧 DCM...\n');
+    % dopu_3D = dopu_splitSpectrum; % [Z, X, Y]
+    % dopu_enface_stack = zeros(nY_out, nX_out, 1, nZ_out, 'uint8');
+    % for z = 1:nZ_out
+    %     dopu_enface = squeeze(dopu_3D(z, :, :))'; % [Y, X]
+    %     dopu_enface_stack(:, :, 1, z) = uint8(255 * dopu_enface);
+    % end
+    % dicomwrite(dopu_enface_stack, fullfile(foutputdir, [name, '_3-4_Enface_DOPU_MultiFrame.dcm']));
+    % dopu_with_boundary = dopu_splitSpectrum;
+    % for iY = 1:size(dopu_with_boundary, 3)
+    %     for iX = 1:size(dopu_with_boundary, 2)
+    %         surface_pos = round(topLines(iX, iY));
+    %         if surface_pos > 1 && surface_pos <= size(dopu_with_boundary, 1)
+    %             dopu_with_boundary(1:surface_pos-1, iX, iY) = 0;  % 边界以上的部分设为黑色
+    %         end
+    %     end
+    % end
+
+    % 4. cumLA En-face (双折射累积) - 基于表面展平并对齐到表面
+    if exist('topLines', 'var') && ~isempty(topLines)
+        fprintf('生成 cumLA En-face 多帧 DCM (展平并对齐)...\n');
+        cumLA_3D = cumLA_cfg_hsv; % [nZ-Avnum, nX, 3, nY]
+        [nZ_cumLA, nX_cumLA, ~, nY_cumLA] = size(cumLA_3D);
+        Avnum = params.polarization.Avnum; % 深度偏移
+        maxDepth = size(Strus, 1);
+
+        % 创建展平的3D数组 (保留 double 格式，随后转换成 uint8)
+        cumLA_3D_flat = zeros(nZ_cumLA, nX_cumLA, 3, nY_cumLA);
+        for iy = 1:nY_cumLA
+            for ix = 1:nX_cumLA
+                surf_pos = round(topLines(ix, iy));
+                % 如果 surf_pos 非法，使用安全默认
+                if surf_pos < 1 || surf_pos > maxDepth
+                    surf_pos = 1;
+                end
+                for z_rel = 1:nZ_cumLA
+                    % 目标绝对深度 (基于表面)
+                    z_abs = surf_pos + (z_rel - 1);
+                    % 对应 cumLA 的索引（考虑 Avnum 的输出延迟）
+                    cum_idx = z_abs - Avnum;
+                    % 使用最近有效索引进行填充，避免空帧
+                    if cum_idx < 1
+                        cum_idx = 1;
+                    elseif cum_idx > nZ_cumLA
+                        cum_idx = nZ_cumLA;
+                    end
+                    cumLA_3D_flat(z_rel, ix, :, iy) = cumLA_3D(cum_idx, ix, :, iy);
+                end
+            end
+        end
+
+        cumLA_enface_stack = zeros(nY_cumLA, nX_cumLA, 3, nZ_cumLA, 'uint8');
+        for z = 1:nZ_cumLA
+            cumLA_slice = squeeze(cumLA_3D_flat(z, :, :, :)); % [nX, 3, nY]
+            cumLA_enface = permute(cumLA_slice, [3, 1, 2]); % [nY, nX, 3]
+            % 将 [0,1] 映射到 uint8 [0,255]
+            cumLA_enface_stack(:, :, :, z) = uint8(255 * cumLA_enface);
+        end
+        dicomwrite(cumLA_enface_stack, fullfile(foutputdir, [name, '_3-5_Enface_cumLA_Flattened_MultiFrame.dcm']));
+    end
+
+    % 5. PhR En-face (相位延迟) - 基于表面展平并对齐到表面
+    if exist('topLines', 'var') && ~isempty(topLines)
+        fprintf('生成 PhR En-face 多帧 DCM (展平并对齐)...\n');
+        PhR_3D = PRRc; % [nZ-Avnum, nX, 3, nY]
+        [nZ_PhR, nX_PhR, ~, nY_PhR] = size(PhR_3D);
+        Avnum = params.polarization.Avnum;
+        maxDepth = size(Strus, 1);
+
+        % 创建展平的3D数组 (保持 uint8)
+        PhR_3D_flat = zeros(nZ_PhR, nX_PhR, 3, nY_PhR, 'uint8');
+        for iy = 1:nY_PhR
+            for ix = 1:nX_PhR
+                surf_pos = round(topLines(ix, iy));
+                if surf_pos < 1 || surf_pos > maxDepth
+                    surf_pos = 1;
+                end
+                for z_rel = 1:nZ_PhR
+                    z_abs = surf_pos + (z_rel - 1);
+                    ph_idx = z_abs - Avnum;
+                    if ph_idx < 1
+                        ph_idx = 1;
+                    elseif ph_idx > nZ_PhR
+                        ph_idx = nZ_PhR;
+                    end
+                    PhR_3D_flat(z_rel, ix, :, iy) = PhR_3D(ph_idx, ix, :, iy);
+                end
+            end
+        end
+
+        PhR_enface_stack = zeros(nY_PhR, nX_PhR, 3, nZ_PhR, 'uint8');
+        for z = 1:nZ_PhR
+            PhR_slice = squeeze(PhR_3D_flat(z, :, :, :)); % [nX, 3, nY]
+            PhR_enface = permute(PhR_slice, [3, 1, 2]); % [nY, nX, 3]
+            PhR_enface_stack(:, :, :, z) = PhR_enface;
+        end
+        dicomwrite(PhR_enface_stack, fullfile(foutputdir, [name, '_3-6_Enface_PhR_Flattened_MultiFrame.dcm']));
+    end
 
     %% DCM到TIFF转换功能
     if params.tiff.saveDicom && params.tiff.make_tiff
         fprintf('\n开始DCM到TIFF转换...\n');
         try
             % 调用本地DCM到TIFF转换函数
-            convert_dcm_to_tiff_local(foutputdir, params.tiff.tiff_frame, name);
+            convert_dcm_to_tiff_local(foutputdir, params.tiff.tiff_frame);
         catch ME
             fprintf('DCM到TIFF转换出错: %s\n', ME.message);
             % 转换出错不影响主流程，继续执行
@@ -493,7 +726,13 @@ function rPSOCT_process_single_file(varargin)
     fprintf('\n');
 
     % 清理并行池（在函数结束时）
-    delete(gcp('nocreate'));
+    % 仅在本函数启动了并行池且配置要求自动关闭时才删除（默认保持并行池存活以提高效率）
+    if exist('poolStartedHere','var') && poolStartedHere && isfield(params,'parallel') && isfield(params.parallel,'autoClosePool') && params.parallel.autoClosePool
+        fprintf('关闭并行池（由本函数启动且 autoClosePool = true）\n');
+        delete(gcp('nocreate'));
+    else
+        fprintf('保留并行池（poolStartedHere=%d, autoClosePool=%d）\n', double(exist('poolStartedHere','var') && poolStartedHere), double(isfield(params,'parallel') && isfield(params.parallel,'autoClosePool') && params.parallel.autoClosePool));
+    end
     end
 return;
 
@@ -676,10 +915,11 @@ end
 %   - 支持两种滤波模式的完整实现
 %   - 用于深入的偏振分析和算法验证
 % ====================================================================================
-function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF,enableDopuPhaseSupp)
+function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF,enableDopuPhaseSupp, verbose)
     % 处理可选参数
     if nargin < 10, wovWinF = 0; end  % 直接设置wovWinF而不是params.mode.wovWinF
     if nargin < 11, enableDopuPhaseSupp = 1; end
+    if nargin < 12, verbose = 0; end  % 0 = 静默, 1 = 简短, 2 = 详细
 
     % 获取数据维度
     [nZ, nX] = size(IMG_ch1);
@@ -723,9 +963,10 @@ function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,t
         [EUmm] = vWinAvgFiltOpt(EUm, dopu_splitSpec_M, kRL, kRU);
         [EVmm] = vWinAvgFiltOpt(EVm, dopu_splitSpec_M, kRL, kRU);
     end
-
+    % fprintf('DOPU分布统计:\n');
+    % fprintf('  范围: [%.4f, %.4f]\n', min(dopu_splitSpec_M(:)), max(dopu_splitSpec_M(:)));
     % 调用核心算法，同时获得处理前后的完整结果
-    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_3_DDG_rmBG_7(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum, dopu_splitSpec_M, enableDopuPhaseSupp);
+    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum, dopu_splitSpec_M, enableDopuPhaseSupp);
 end
 
 %% ====================================================================================
@@ -784,7 +1025,7 @@ end
 %   dcm_folder - DCM文件所在文件夹路径
 %   target_frame - 目标帧号(从1开始)
 %   output_prefix - 输出文件前缀名(可选)
-% 输出: 在dcm_folder内创建tiff文件夹，保存单帧TIFF文件
+% 输出: 在dcm_folder内保存单帧TIFF文件
 % ====================================================================================
 function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_prefix)
     % 参数检查和默认值设置
@@ -801,11 +1042,21 @@ function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_prefix)
         error(['DCM文件夹不存在: ' dcm_folder]);
     end
 
-    % 创建输出目录 - 直接在DCM文件夹内创建tiff子目录
-    tiff_output_dir = fullfile(dcm_folder, 'tiff');
-
-    if ~exist(tiff_output_dir, 'dir')
-        mkdir(tiff_output_dir);
+    % 输出目录：'tiff' 和 'png' 子目录
+    tiff_dir = fullfile(dcm_folder, 'tiff');
+    png_dir  = fullfile(dcm_folder, 'png');
+    % 尝试创建子目录，如失败则回退到 DCM 文件夹本身
+    try
+        if ~exist(tiff_dir, 'dir'), mkdir(tiff_dir); end
+    catch ME
+        warning('无法创建 TIFF 输出目录 %s: %s\n将退回保存到 DCM 文件夹 %s', tiff_dir, ME.message, dcm_folder);
+        tiff_dir = dcm_folder;
+    end
+    try
+        if ~exist(png_dir, 'dir'), mkdir(png_dir); end
+    catch ME
+        warning('无法创建 PNG 输出目录 %s: %s\n将退回保存到 DCM 文件夹 %s', png_dir, ME.message, dcm_folder);
+        png_dir = dcm_folder;
     end
 
     % 查找所有DCM文件
@@ -816,7 +1067,7 @@ function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_prefix)
         return;
     end
 
-    fprintf('转换 %d 个DCM文件的第%d帧到TIFF...\n', length(dcm_files), target_frame);
+    fprintf('转换 %d 个DCM文件的第%d帧到 TIFF 和 PNG...\n', length(dcm_files), target_frame);
 
     % 处理每个DCM文件
     success_count = 0;
@@ -857,14 +1108,34 @@ function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_prefix)
             [~, base_name, ~] = fileparts(dcm_filename);
             if isempty(output_prefix)
                 tiff_filename = sprintf('%s_frame%d.tiff', base_name, target_frame);
+                png_filename  = sprintf('%s_frame%d.png', base_name, target_frame);
             else
                 tiff_filename = sprintf('%s_%s_frame%d.tiff', output_prefix, base_name, target_frame);
+                png_filename  = sprintf('%s_%s_frame%d.png', output_prefix, base_name, target_frame);
             end
-            tiff_filepath = fullfile(tiff_output_dir, tiff_filename);
-            
-            % 保存为单帧TIFF文件
-            imwrite(frame_data, tiff_filepath);
-            success_count = success_count + 1;
+            tiff_filepath = fullfile(tiff_dir, tiff_filename);
+            png_filepath  = fullfile(png_dir, png_filename);
+
+            % 尝试分别保存 TIFF 和 PNG
+            saved_any = false;
+            try
+                imwrite(frame_data, tiff_filepath);
+                fprintf('保存 TIFF: %s\n', tiff_filepath);
+                saved_any = true;
+            catch ME
+                fprintf('保存 TIFF 失败 %s: %s\n', tiff_filepath, ME.message);
+            end
+            try
+                imwrite(frame_data, png_filepath);
+                fprintf('保存 PNG: %s\n', png_filepath);
+                saved_any = true;
+            catch ME
+                fprintf('保存 PNG 失败 %s: %s\n', png_filepath, ME.message);
+            end
+
+            if saved_any
+                success_count = success_count + 1;
+            end
             
         catch ME
             fprintf('处理文件 %s 出错: %s\n', dcm_filename, ME.message);
@@ -872,5 +1143,5 @@ function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_prefix)
         end
     end
 
-    fprintf('完成! 成功转换 %d/%d 个文件到: %s\n', success_count, length(dcm_files), tiff_output_dir);
+    fprintf('完成! 成功转换 %d/%d 个文件。输出目录: %s 以及 %s\n', success_count, length(dcm_files), tiff_dir, png_dir);
 end
