@@ -22,20 +22,23 @@ params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保�
 
 %% ========== 基础处理参数 ==========
 params.processing.disp_coef = -20.1;           % 色散补偿系数
-params.processing.do_PhComp = 1;               % 是否进行相位补偿 (1:开启, 0:关闭)
+params.processing.do_PhComp = 1;               % 是否进行相位/色散补偿 (1:启用, 0:禁用)
 params.processing.do_medianshift = 1;          % 是否进行中值偏移校正
 params.processing.do_reg = 0;                  % 是否进行帧间配准(运动去除)
 params.processing.useref = 1;                  % 参考信号模式 (1:使用前50k A-line, 0:使用背景, -1:不使用)
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
-params.processing.hasSeg = 0;                  % 是否已有分割结果(.mat文件)
-params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
+params.processing.enable_flatten_enface = 0;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
+params.processing.enable_enface_noflat = 0;    % 1: 生成非展平En-face切片（直接从原始数据切片）, 0: 禁用
+params.processing.max_frames = 35;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
+params.parallel.batchSize = 500;
 
 %% ========== 并行处理设置 ==========
 params.parallel.LocalUseMpiexec = false;       % 并行处理MPI设置
 % 可选：限制并行池最大 worker 数 (0 表示由代码自动选择)
-params.parallel.maxWorkers = 48;
+params.parallel.maxWorkers = 35;
 % 并行相关资源限制: 最大可用内存 (GB) 用于一次性预加载阈值
 params.parallel.maxMemGB = 100;
 % 是否在函数结束时自动关闭并行池 (false = 保持池存活以节省启动时间)
@@ -67,7 +70,7 @@ params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂�
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置(MAX_AVNUM = 19)
-params.polarization.Avnum = 19;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum = 13;                 % DDG测试用平均层数(统一使用以保持一致性)
 params.polarization.enableDopuPhaseSupp = 0;  % 1: 使用DOPU自适应相位抑制; 0: 关闭该功能
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
@@ -85,15 +88,15 @@ params.polarization.kRU_cfg1 = 21;              % 配置1滤波核上限(适当�
 % - 基于DOPU图像质量反馈，增大滤波核以改善分层清晰度
 
 % 小尺度高斯核 (用于细节保持和初步降噪) - 细节优先
-params.filters.h1_size = [3 3];                % 高斯核1尺寸 (减小以增强局部纹理)
-params.filters.h1_sigma = 1.2;                % 高斯核1标准差 (降低以避免过度平滑)
+params.filters.h1_size = [5 5];                % 高斯核1尺寸 (减小以增强局部纹理)
+params.filters.h1_sigma = 1.5;                % 高斯核1标准差 (降低以避免过度平滑)
 params.filters.h1 = fspecial('gaussian', params.filters.h1_size, params.filters.h1_sigma);
 
 % 中尺度高斯核 (用于结构增强和背景平滑) - 背景优先
-params.filters.h2_size = [31 31];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
-params.filters.h2_sigma = 5;                  % 高斯核2标准差 (增大以抑制深层噪声)
-% params.filters.h2_size = [31 31];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
-% params.filters.h2_sigma = 5;                  % 高斯核2标准差 (增大以抑制深层噪声)
+params.filters.h2_size = [13 13];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
+params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以抑制深层噪声)
+% params.filters.h2_size = [13 13];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
+% params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以抑制深层噪声)
 params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
 
 % （已删除若干未使用的注释/备用参数，以保持配置简洁）
@@ -144,6 +147,7 @@ if nargout == 0
     fprintf('DOPU计算方法: avg (固定)\n');
     fprintf('滤波模式: %s\n', iif(params.mode.wovWinF, '固定高斯', '自适应DOPU'));
     fprintf('平均层数 (Avnum): %d\n', params.polarization.Avnum);
+    fprintf('展平并生成 En-face: %s\n', iif(params.processing.enable_flatten_enface, '启用', '禁用'));
         fprintf('DOPU相位抑制: %s\n', iif(params.polarization.enableDopuPhaseSupp, '启用', '禁用'));
     fprintf('==========================\n\n');
 end

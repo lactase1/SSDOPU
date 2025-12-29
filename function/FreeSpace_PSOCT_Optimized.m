@@ -1,8 +1,14 @@
-function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp)
-% FreeSpace_PSOCT_Optimized (修正版)
-% 修复了遗漏的低 DOPU 区域预平滑逻辑
+function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold)
+% FreeSpace_PSOCT_Optimized (重构优化版)
+% 主要改进:
+%   1. 移除不稳定的 median(validDopu)*1.2 阈值自动计算
+%   2. 直接使用预处理 DOPU Map，移除循环内冗余计算
+%   3. 基于 DOPU 的自适应拟合策略（高 DOPU 小窗口，低 DOPU 大窗口+约束）
 
     %% 参数默认值与初始化
+    if nargin < 11 || isempty(dopuThreshold)
+        dopuThreshold = 0.4;  % 默认阈值（用户可传入自定义值）
+    end
     if nargin < 10, enableDopuPhaseSupp = true; end
     if nargin < 9 || isempty(dopuMap), dopuMap = []; end
     
@@ -14,15 +20,10 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
     dTheta = DTheta / 320;
     LABG = [1 0 0];
     
-    % DOPU 阈值自动计算
-    dopuLowThresh = 0.5;
+    % 修改1: 移除原有的 median(validDopu) * 1.2 自动阈值计算
+    % 改为优先使用函数传入的 dopuThreshold 参数，否则默认 0.4
+    dopuLowThresh = dopuThreshold;
     dopuMinScale = 0.1;
-    if ~isempty(dopuMap)
-        validDopu = dopuMap(dopuMap > 0 & ~isnan(dopuMap));
-        if ~isempty(validDopu)
-            dopuLowThresh = min(max(median(validDopu) * 1.2, 0.1), 0.8);
-        end
-    end
 
     %% Step 1: 数据平展
     StruF = zeros(size(Stru));
@@ -83,17 +84,10 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
                 continue;
             end
             
-            % 优化 DOPU 使用逻辑：优先使用传入的 dopuMap（若存在且有效），只有在缺失或非法时才计算窗口 DOPU
-            if ~isempty(dopuMap) && i <= size(dopuMap, 1) && j <= size(dopuMap, 2)
-                winDOPU = dopuMap(i, j);
-                % 若传入值为 NaN 或非法（<0）则回退到窗口估计
-                if isnan(winDOPU) || winDOPU < 0
-                    winDOPU = calcWindowDOPU(windowData);
-                end
-            else
-                % 没有外部 DOPU map 时在本地计算
-                winDOPU = calcWindowDOPU(windowData);
-            end
+            % 修改2: 直接信任并读取预处理好的 DopuF(i, j)，移除循环内冗余计算
+            % 假设外部传入的 DOPU Map 是准确的，不再重复计算
+            winDOPU = DopuF(i, j);
+            
             % 保证数值稳定且在 [0,1] 范围内
             if isnan(winDOPU), winDOPU = 0; end
             winDOPU = min(max(winDOPU, 0), 1);
@@ -109,32 +103,41 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
                 Stokes_DeMod(k, :) = (rotationVectorToMatrix(angle_mod * LABG) * vec_in')';
             end
             
-            % --- 采用自适应多点拟合并使用切面圆约束（planeFitConstrained） ---
-            % 动态确定拟合点数：DOPU 越高使用越少点，DOPU 越低使用越多点以增强稳定性
-            opts.minFit = max(3, min(6, Avnum)); % 最小拟合点数（至少3）
-            opts.maxFit = Avnum;                 % 最大拟合点数
-            opts.r_min = 0.5;                    % 切面圆最小半径阈值（可调）
-
-            currDOPU = min(max(winDOPU, 0), 1);
-            nFit = round(opts.maxFit - (opts.maxFit - opts.minFit) * currDOPU);
-            nFit = max(opts.minFit, min(opts.maxFit, nFit));
-
-            % 取窗口头部的 nFit 个点用于拟合（保留深度方向信息）
-            S_use_mod = Stokes_DeMod(1:nFit, :);
-            S_use_dc  = Stokes_DeDC(1:nFit, :);
-
-            % 对调制信号进行切面圆约束拟合
-            [B_raw_vec, c_raw, r_raw] = planeFitConstrained(S_use_mod, opts.r_min);
-            % 对去直流信号进行拟合（用于补偿/备选）
-            [B_dc_vec, c_dc, r_dc] = planeFitConstrained(S_use_dc, opts.r_min);
-
-            % [B_raw_vec, ~] = threePointFitting(S_use_mod);
-            % [B_dc_vec, ~]  = threePointFitting(S_use_dc);
-
-            % 方向符号校正：使用首中末点粗略叉乘确定旋转手性
-            if size(S_use_mod,1) >= 3
-                ref_dir = cross(S_use_mod(2,:) - S_use_mod(1,:), S_use_mod(end,:) - S_use_mod(round(end/2), :));
-                if dot(B_raw_vec, ref_dir) < 0, B_raw_vec = -B_raw_vec; end
+            % 修改3: 彻底重写光轴计算分支，基于 DOPU 的自适应分级拟合
+            % 
+            % 分支 A (winDOPU > dopuLowThresh): 高信噪比区域
+            %   - 使用标准多点拟合 (multiPointFitting)
+            %   - 拟合点数 = 5，以保留最高的轴向分辨率
+            %   - 不应用切面圆半径约束
+            %
+            % 分支 B (winDOPU <= dopuLowThresh): 噪声/深层区域
+            %   - 使用最大窗口拟合 (nFit = Avnum)，利用更多点来压制噪声
+            %   - 启用 planeFitConstrained，r_min = 0.6
+            %   - 防止光轴随机跳变
+            
+            if winDOPU > dopuLowThresh
+                % === 分支 A: 高 DOPU 区域（高信噪比） ===
+                nFit = min(3, Avnum);  % 使用 3 个点拟合（小窗口，高分辨率）
+                
+                % 取窗口头部的 nFit 个点
+                S_use_mod = Stokes_DeMod(1:nFit, :);
+                S_use_dc  = Stokes_DeDC(1:nFit, :);
+                
+                % 使用标准多点拟合，不应用半径约束
+                [B_raw_vec, ~] = multiPointFitting(S_use_mod);
+                [B_dc_vec, ~]  = multiPointFitting(S_use_dc);
+            else
+                % === 分支 B: 低 DOPU 区域（低信噪比） ===
+                nFit = Avnum;  % 使用所有点拟合（大窗口，压制噪声）
+                
+                % 取窗口所有点
+                S_use_mod = Stokes_DeMod;
+                S_use_dc  = Stokes_DeDC;
+                
+                % 使用切面圆约束拟合，r_min = 0.6（强制半径法）
+                r_min = 0.6;
+                [B_raw_vec, ~, ~] = planeFitConstrained(S_use_mod, r_min);
+                [B_dc_vec, ~, ~]  = planeFitConstrained(S_use_dc, r_min);
             end
 
             % 使用约束后的向量计算相位和原始累积 LA
@@ -146,7 +149,7 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
             P3 = S_use_mod(end, :);
             T3_nor = norm(P3 - P1);
 
-            % B_dedc 用于后续 DeltaB 逻辑，使用约束后的去直流结果
+            % B_dedc 用于后续 DeltaB 逻辑
             B_dedc = B_dc_vec;
             
             if T3_nor < 0.065

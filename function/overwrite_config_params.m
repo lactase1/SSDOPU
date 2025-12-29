@@ -4,6 +4,7 @@ function overwrite_config_params(updates, config_file)
 %     updates.polarization.Avnum
 %     updates.filters.h2_sigma
 %     updates.filters.h2_size  (% [sz sz])
+%     updates.mode.wovWinF
 %   config_file: config_params.m 的完整路径
 %
 % 注意：此函数不会创建备份，也不会做复杂的验证，仅按正则替换文本并写回文件。
@@ -68,6 +69,19 @@ if isfield(updates, 'filters') && isfield(updates.filters, 'h2_size')
     end
 end
 
+% 替换 wovWinF
+if isfield(updates, 'mode') && isfield(updates.mode, 'wovWinF')
+    pattern = 'params\.mode\.wovWinF\s*=\s*\d+\s*;';
+    matches = regexp(txt, pattern, 'match');
+    repl_report.wovWinF_matches_before = numel(matches);
+    if repl_report.wovWinF_matches_before > 0
+        txt = regexprep(txt, pattern, sprintf('params.mode.wovWinF = %d;', updates.mode.wovWinF));
+        repl_report.wovWinF_replaced = true;
+    else
+        repl_report.wovWinF_replaced = false;
+    end
+end
+
 % 写回文件（覆盖）
 fid = fopen(config_file, 'w');
 if fid == -1
@@ -103,6 +117,15 @@ if isfield(repl_report, 'h2_size_replaced')
         fprintf('新行: %s\n', m{1});
     else
         warning('overwrite_config_params: 未找到 h2_size 赋值行以进行替换');
+    end
+end
+if isfield(repl_report, 'wovWinF_replaced')
+    if repl_report.wovWinF_replaced
+        fprintf('overwrite_config_params: wovWinF 替换成功，原匹配数=%d\n', repl_report.wovWinF_matches_before);
+        m = regexp(new_txt, 'params\.mode\.wovWinF\s*=\s*\d+\s*;', 'match');
+        fprintf('新行: %s\n', m{1});
+    else
+        warning('overwrite_config_params: 未找到 wovWinF 赋值行以进行替换');
     end
 end
 
