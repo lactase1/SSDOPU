@@ -1,11 +1,21 @@
-function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold)
+function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold, enableOutputAdaptive, kRL_output, kRU_output)
 % FreeSpace_PSOCT_Optimized (重构优化版)
 % 主要改进:
 %   1. 移除不稳定的 median(validDopu)*1.2 阈值自动计算
 %   2. 直接使用预处理 DOPU Map，移除循环内冗余计算
 %   3. 基于 DOPU 的自适应拟合策略（高 DOPU 小窗口，低 DOPU 大窗口+约束）
+%   4. 支持输出端自适应滤波：根据DOPU值动态调整光轴/延迟的滤波强度
 
     %% 参数默认值与初始化
+    if nargin < 14 || isempty(kRU_output)
+        kRU_output = 21;  % 默认上限
+    end
+    if nargin < 13 || isempty(kRL_output)
+        kRL_output = 3;   % 默认下限
+    end
+    if nargin < 12 || isempty(enableOutputAdaptive)
+        enableOutputAdaptive = false;  % 默认禁用自适应滤波
+    end
     if nargin < 11 || isempty(dopuThreshold)
         dopuThreshold = 0.4;  % 默认阈值（用户可传入自定义值）
     end
@@ -213,12 +223,30 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
     end
 
     %% Step 4: 空间滤波
-    [cumLA_bg_gF] = filterVectorField(cumLA_bg, h2);
-    [cumLA_raw_gF] = filterVectorField(cumLA_raw, h2);
-    
-    phR_gF      = imfilter(phR, h2, 'replicate');
-    phR_rmBG_gF = imfilter(phR_rmBG, h2, 'replicate');
-    phR_raw_gF  = imfilter(phR_raw, h2, 'replicate');
+    if enableOutputAdaptive
+        % 【新功能】自适应滤波：根据DOPU值动态调整滤波强度
+        % 高DOPU区域（组织）：小核滤波，保留细节
+        % 低DOPU区域（噪声/背景）：大核滤波，强平滑抑制噪声
+        
+        % 【关键修复】裁剪DopuF到与输出数组相同的深度
+        DopuF_cropped = DopuF(1:output_depth, :);
+        
+        [cumLA_bg_gF] = filterVectorFieldAdaptive(cumLA_bg, DopuF_cropped, kRL_output, kRU_output);
+        [cumLA_raw_gF] = filterVectorFieldAdaptive(cumLA_raw, DopuF_cropped, kRL_output, kRU_output);
+        
+        % 对标量场（延迟相位）也应用自适应滤波
+        phR_gF      = vWinAvgFiltOpt(phR, DopuF_cropped, kRL_output, kRU_output);
+        phR_rmBG_gF = vWinAvgFiltOpt(phR_rmBG, DopuF_cropped, kRL_output, kRU_output);
+        phR_raw_gF  = vWinAvgFiltOpt(phR_raw, DopuF_cropped, kRL_output, kRU_output);
+    else
+        % 传统固定高斯滤波
+        [cumLA_bg_gF] = filterVectorField(cumLA_bg, h2);
+        [cumLA_raw_gF] = filterVectorField(cumLA_raw, h2);
+        
+        phR_gF      = imfilter(phR, h2, 'replicate');
+        phR_rmBG_gF = imfilter(phR_rmBG, h2, 'replicate');
+        phR_raw_gF  = imfilter(phR_raw, h2, 'replicate');
+    end
 
     %% Step 5: 三维光轴递推
     bfloaxis3D     = drLA_Optimized(cumLA_bg_gF, -phR_gF, h2);

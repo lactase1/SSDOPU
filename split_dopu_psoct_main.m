@@ -21,7 +21,7 @@ end
 % 设置数据路径
 data_path   = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output/dopu_13layer_3_13';
+output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_13layer_3_13';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -543,6 +543,9 @@ function rPSOCT_process_single_file(varargin)
             local_Avnum = params.polarization.Avnum;
             local_wovWinF = params.mode.wovWinF;
             local_enableDopuPhaseSupp = params.polarization.enableDopuPhaseSupp;
+            local_enableOutputAdaptive = params.filters.enable_output_adaptive;
+            local_kRL_output = params.filters.kRL_output;
+            local_kRU_output = params.filters.kRU_output;
             local_phV = single(phV);
             local_winG = single(winG);
             local_winG_whole = single(winG_whole);
@@ -612,7 +615,8 @@ function rPSOCT_process_single_file(varargin)
                 [LA_tmp, PhR_tmp, cumLA_tmp, LA_rmBG_tmp, PhR_rmBG_tmp, cumLA_rmBG_tmp] = ...
                     calLAPhRALL(IMG_ch1, IMG_ch2, local_topLine, dopu_splitSpec_M, ...
                         local_kRL_cfg1, local_kRU_cfg1, local_h1, local_h2, ...
-                        local_Avnum, local_wovWinF, local_enableDopuPhaseSupp, verbose);
+                        local_Avnum, local_wovWinF, local_enableDopuPhaseSupp, verbose, ...
+                        local_enableOutputAdaptive, local_kRL_output, local_kRU_output);
                 
                 % 存储到批次临时数组（使用 iY_local 作为索引）
                 batch_LA_c_cfg1_avg(:, :, :, iY_local) = LA_tmp;
@@ -700,7 +704,7 @@ function rPSOCT_process_single_file(varargin)
 
         % 对1-4 DOPU图像应用阈值过滤（只保留前300层）
         dopu_thresholded = dopu_splitSpectrum(1:nZ_save, :, :);
-        dopu_thresholded(dopu_thresholded <= 0.45) = 0;  % 小于等于0.5的设为0
+        dopu_thresholded(dopu_thresholded <= 0.38) = 0;  % 小于等于0.5的设为0
 
         dicomwrite(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), fullfile(dcm_dir, [name, '_1-4_dopu_SS.dcm']));
         

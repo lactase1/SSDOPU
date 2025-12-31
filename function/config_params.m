@@ -99,6 +99,12 @@ params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以�
 % params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以抑制深层噪声)
 params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
 
+% 【输出端自适应滤波参数】用于光轴和延迟结果的DOPU自适应平滑
+% 根据DOPU值动态调整滤波强度：低DOPU区域（噪声）大核强平滑，高DOPU区域（组织）小核保留细节
+params.filters.enable_output_adaptive = 1;     % 1: 启用输出端自适应滤波; 0: 使用传统固定h2滤波
+params.filters.kRL_output = 3;                 % 输出滤波核下限 (高DOPU区域，小核保留细节)
+params.filters.kRU_output = 21;                % 输出滤波核上限 (低DOPU区域，大核强平滑背景)
+
 % （已删除若干未使用的注释/备用参数，以保持配置简洁）
 
 %% ========== 表面检测参数 ==========
@@ -148,6 +154,12 @@ if nargout == 0
     fprintf('滤波模式: %s\n', iif(params.mode.wovWinF, '固定高斯', '自适应DOPU'));
     fprintf('平均层数 (Avnum): %d\n', params.polarization.Avnum);
     fprintf('展平并生成 En-face: %s\n', iif(params.processing.enable_flatten_enface, '启用', '禁用'));
-        fprintf('DOPU相位抑制: %s\n', iif(params.polarization.enableDopuPhaseSupp, '启用', '禁用'));
+    fprintf('DOPU相位抑制: %s\n', iif(params.polarization.enableDopuPhaseSupp, '启用', '禁用'));
+    fprintf('输出端自适应滤波: %s', iif(params.filters.enable_output_adaptive, '启用', '禁用'));
+    if params.filters.enable_output_adaptive
+        fprintf(' (kR范围: %d~%d)\n', params.filters.kRL_output, params.filters.kRU_output);
+    else
+        fprintf('\n');
+    end
     fprintf('==========================\n\n');
 end
