@@ -234,10 +234,10 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
         [cumLA_bg_gF] = filterVectorFieldAdaptive(cumLA_bg, DopuF_cropped, kRL_output, kRU_output);
         [cumLA_raw_gF] = filterVectorFieldAdaptive(cumLA_raw, DopuF_cropped, kRL_output, kRU_output);
         
-        % 对标量场（延迟相位）也应用自适应滤波
-        phR_gF      = vWinAvgFiltOpt(phR, DopuF_cropped, kRL_output, kRU_output);
-        phR_rmBG_gF = vWinAvgFiltOpt(phR_rmBG, DopuF_cropped, kRL_output, kRU_output);
-        phR_raw_gF  = vWinAvgFiltOpt(phR_raw, DopuF_cropped, kRL_output, kRU_output);
+        % 对标量场（延迟相位）使用固定滤波，不应用自适应DOPU滤波
+        phR_gF      = imfilter(phR, h2, 'replicate');
+        phR_rmBG_gF = imfilter(phR_rmBG, h2, 'replicate');
+        phR_raw_gF  = imfilter(phR_raw, h2, 'replicate');
     else
         % 传统固定高斯滤波
         [cumLA_bg_gF] = filterVectorField(cumLA_bg, h2);
