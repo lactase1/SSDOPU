@@ -1,17 +1,27 @@
-function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold, enableOutputAdaptive, kRL_output, kRU_output)
+function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold, enableOutputAdaptive, kRL_output, kRU_output, outputDopuThreshold, enableBottomLayerPhaseReduction, bottomLayerDepth)
 % FreeSpace_PSOCT_Optimized (重构优化版)
 % 主要改进:
 %   1. 移除不稳定的 median(validDopu)*1.2 阈值自动计算
 %   2. 直接使用预处理 DOPU Map，移除循环内冗余计算
 %   3. 基于 DOPU 的自适应拟合策略（高 DOPU 小窗口，低 DOPU 大窗口+约束）
 %   4. 支持输出端自适应滤波：根据DOPU值动态调整光轴/延迟的滤波强度
+%   5. 支持底层相位延迟减小：在深层区域对低DOPU像素降低相位延迟50%
 
     %% 参数默认值与初始化
+    if nargin < 17 || isempty(bottomLayerDepth)
+        bottomLayerDepth = 80;  % 默认底层深度为80层
+    end
+    if nargin < 16 || isempty(enableBottomLayerPhaseReduction)
+        enableBottomLayerPhaseReduction = false;  % 默认禁用底层相位延迟减小
+    end
+    if nargin < 15 || isempty(outputDopuThreshold)
+        outputDopuThreshold = 0.4;  % 默认输出滤波DOPU阈值
+    end
     if nargin < 14 || isempty(kRU_output)
         kRU_output = 21;  % 默认上限
     end
     if nargin < 13 || isempty(kRL_output)
-        kRL_output = 3;   % 默认下限
+        kRL_output = 13;   % 默认下限（通常设为h2核大小）
     end
     if nargin < 12 || isempty(enableOutputAdaptive)
         enableOutputAdaptive = false;  % 默认禁用自适应滤波
@@ -222,17 +232,56 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
         end
     end
 
+    %% Step 3.6: 底层相位延迟减小
+    % 在底层深度区域，对低DOPU像素降低相位延迟50%，并进行平滑处理
+    if enableBottomLayerPhaseReduction
+        % 确定底层区域的起始深度
+        bottomStartDepth = max(1, output_depth - bottomLayerDepth + 1);
+        
+        % 裁剪DOPU图到与输出相同的深度
+        DopuF_cropped = DopuF(1:output_depth, :);
+        
+        % 构建底层低DOPU掩码：底层区域 且 DOPU < 阈值
+        maskBottomLowDopu = false(output_depth, nX);
+        maskBottomLowDopu(bottomStartDepth:end, :) = ...
+            (DopuF_cropped(bottomStartDepth:end, :) > 0) & ...
+            (DopuF_cropped(bottomStartDepth:end, :) < dopuThreshold);
+        
+        % 创建减小因子图（50%减小 = 乘以0.5）
+        reductionFactor = ones(output_depth, nX);
+        reductionFactor(maskBottomLowDopu) = 0.5;
+        
+        % 对减小因子进行高斯平滑，避免突兀的边界
+        % 使用中等大小的高斯核进行平滑过渡
+        smoothKernel = fspecial('gaussian', [7 7], 2.0);
+        reductionFactor_smooth = imfilter(reductionFactor, smoothKernel, 'replicate');
+        
+        % 应用平滑后的减小因子到相位延迟
+        phR = phR .* reductionFactor_smooth;
+        phR_raw = phR_raw .* reductionFactor_smooth;
+        phR_rmBG = phR_rmBG .* reductionFactor_smooth;
+    end
+
     %% Step 4: 空间滤波
     if enableOutputAdaptive
-        % 【新功能】自适应滤波：根据DOPU值动态调整滤波强度
-        % 高DOPU区域（组织）：小核滤波，保留细节
-        % 低DOPU区域（噪声/背景）：大核滤波，强平滑抑制噪声
+        % 【新功能】混合滤波策略：根据DOPU阈值(0.4)选择滤波方式
+        % DOPU >= 0.4（高质量组织）：使用固定h2滤波，保留细节
+        % DOPU < 0.4（低质量/深层）：使用自适应DOPU滤波，从h2核大小开始根据DOPU向上调整核大小
         
         % 【关键修复】裁剪DopuF到与输出数组相同的深度
         DopuF_cropped = DopuF(1:output_depth, :);
         
-        [cumLA_bg_gF] = filterVectorFieldAdaptive(cumLA_bg, DopuF_cropped, kRL_output, kRU_output);
-        [cumLA_raw_gF] = filterVectorFieldAdaptive(cumLA_raw, DopuF_cropped, kRL_output, kRU_output);
+        % 【参数校验】确保 kRL_output < kRU_output，如果不满足则交换
+        if kRL_output >= kRU_output
+            warning('FreeSpace_PSOCT_Optimized: kRL_output(%d) >= kRU_output(%d)，自动交换', kRL_output, kRU_output);
+            temp = kRL_output;
+            kRL_output = kRU_output;
+            kRU_output = temp;
+        end
+        
+        % 对向量场使用混合滤波策略（传入h2作为固定滤波核和DOPU阈值）
+        [cumLA_bg_gF] = filterVectorFieldAdaptive(cumLA_bg, DopuF_cropped, kRL_output, kRU_output, h2, outputDopuThreshold);
+        [cumLA_raw_gF] = filterVectorFieldAdaptive(cumLA_raw, DopuF_cropped, kRL_output, kRU_output, h2, outputDopuThreshold);
         
         % 对标量场（延迟相位）使用固定滤波，不应用自适应DOPU滤波
         phR_gF      = imfilter(phR, h2, 'replicate');

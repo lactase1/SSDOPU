@@ -11,9 +11,12 @@
 %   wovWinF - 滤波模式(可选参数，默认为0)
 %   enableDopuPhaseSupp - DOPU相位抑制开关(可选，默认为1)
 %   verbose - 详细输出等级(可选，默认为0: 静默)
-%   enableOutputAdaptive - 启用输出端自适应滤波(可选，默认为0)
-%   kRL_output - 输出滤波核下限(可选，默认为3)
+%   enableOutputAdaptive - 启用输出端混合滤波(可选，默认为0)
+%   kRL_output - 输出滤波核下限(可选，默认为13)
 %   kRU_output - 输出滤波核上限(可选，默认为21)
+%   outputDopuThreshold - 输出滤泥DOPU阈值(可选，默认为0.4)
+%   enableBottomLayerPhaseReduction - 启用底层相位延迟减小(可选，默认为0)
+%   bottomLayerDepth - 底层深度范围(可选，默认为80)
 % 输出参数:
 %   LA - 处理后的局部双折射 [(Z-Avnum)×X×3]
 %   PhR - 处理后的相位延迟 [(Z-Avnum)×X]
@@ -25,16 +28,20 @@
 %   - 提供完整的处理流程，包括原始和处理后的结果
 %   - 支持两种滤波模式的完整实现
 %   - 支持输出端自适应滤波，根据DOPU动态调整光轴/延迟滤波
+%   - 支持底层相位延迟减小，降低深层区域噪声
 %   - 用于深入的偏振分析和算法验证
 % ====================================================================================
-function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF,enableDopuPhaseSupp, verbose, enableOutputAdaptive, kRL_output, kRU_output)
+function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,test_seg_top,dopu_splitSpec_M,kRL,kRU,h1,h2,Avnum,wovWinF,enableDopuPhaseSupp, verbose, enableOutputAdaptive, kRL_output, kRU_output, outputDopuThreshold, enableBottomLayerPhaseReduction, bottomLayerDepth)
     % 处理可选参数
     if nargin < 10, wovWinF = 0; end  % 直接设置wovWinF而不是params.mode.wovWinF
     if nargin < 11, enableDopuPhaseSupp = 1; end
     if nargin < 12, verbose = 0; end  % 0 = 静默, 1 = 简短, 2 = 详细
-    if nargin < 13, enableOutputAdaptive = 0; end  % 默认禁用自适应输出滤波
-    if nargin < 14, kRL_output = 3; end  % 默认滤波核下限
-    if nargin < 15, kRU_output = 21; end  % 默认滤波核上限
+    if nargin < 13, enableOutputAdaptive = 0; end  % 默认禁用自适应输出滤泥
+    if nargin < 14, kRL_output = 13; end  % 默认滤泥核下限
+    if nargin < 15, kRU_output = 21; end  % 默认滤泥核上限
+    if nargin < 16, outputDopuThreshold = 0.4; end  % 默认输出滤泥DOPU阈值
+    if nargin < 17, enableBottomLayerPhaseReduction = 0; end  % 默认禁用底层相位延迟减小
+    if nargin < 18, bottomLayerDepth = 80; end  % 默认底层深度80层
 
     % 获取数据维度
     [nZ, nX] = size(IMG_ch1);
@@ -77,5 +84,5 @@ function [LA,PhR,cumLA,LA_raw,PhR_raw,cumLA_raw] = calLAPhRALL(IMG_ch1,IMG_ch2,t
     end
 
     % 调用核心算法，同时获得处理前后的完整结果
-    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum, dopu_splitSpec_M, enableDopuPhaseSupp, 0.42, enableOutputAdaptive, kRL_output, kRU_output);
+    [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(EQmm, EUmm, EVmm, Stru_E, test_seg_top, h1, h2, Avnum, dopu_splitSpec_M, enableDopuPhaseSupp, 0.42, enableOutputAdaptive, kRL_output, kRU_output, outputDopuThreshold, enableBottomLayerPhaseReduction, bottomLayerDepth);
 end

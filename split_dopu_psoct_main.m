@@ -21,7 +21,7 @@ end
 % 设置数据路径
 data_path   = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_13layer_3_13';
+output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_3layer_3_13';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -546,6 +546,9 @@ function rPSOCT_process_single_file(varargin)
             local_enableOutputAdaptive = params.filters.enable_output_adaptive;
             local_kRL_output = params.filters.kRL_output;
             local_kRU_output = params.filters.kRU_output;
+            local_outputDopuThreshold = params.filters.output_dopu_threshold;
+            local_enableBottomLayerPhaseReduction = params.filters.enable_bottom_layer_phase_reduction;
+            local_bottomLayerDepth = params.filters.bottom_layer_depth;
             local_phV = single(phV);
             local_winG = single(winG);
             local_winG_whole = single(winG_whole);
@@ -616,7 +619,8 @@ function rPSOCT_process_single_file(varargin)
                     calLAPhRALL(IMG_ch1, IMG_ch2, local_topLine, dopu_splitSpec_M, ...
                         local_kRL_cfg1, local_kRU_cfg1, local_h1, local_h2, ...
                         local_Avnum, local_wovWinF, local_enableDopuPhaseSupp, verbose, ...
-                        local_enableOutputAdaptive, local_kRL_output, local_kRU_output);
+                        local_enableOutputAdaptive, local_kRL_output, local_kRU_output, ...
+                        local_outputDopuThreshold, local_enableBottomLayerPhaseReduction, local_bottomLayerDepth);
                 
                 % 存储到批次临时数组（使用 iY_local 作为索引）
                 batch_LA_c_cfg1_avg(:, :, :, iY_local) = LA_tmp;
