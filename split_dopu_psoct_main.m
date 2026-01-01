@@ -737,6 +737,27 @@ function rPSOCT_process_single_file(varargin)
             PRRc_rmBG(:, :, :, iY) = uint8(ind2rgb(uint8(mat2gray(PhR_Ms_cfg1_rmBG(:, :, iY), PRRrg) * 256), parula(256)) * 256);
         end
         
+        % 应用边界mask：将边界以上的区域设为纯黑色（只处理前nZ_save层）
+        for iY = 1:nY
+            for iX = 1:size(cumLA_cfg_hsv, 2)
+                surface_pos = round(topLines(iX, iY));
+                if surface_pos > 1 && surface_pos <= nZ_save
+                    % 对累积光轴HSV图像应用mask
+                    cumLA_cfg_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对局部光轴HSV图像应用mask
+                    LA_cfg_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对延迟相位彩色图像应用mask
+                    PRRc(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对去背景后的累积光轴HSV图像应用mask
+                    cumLA_Ms_cfg1_rmBG_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对去背景后的局部光轴HSV图像应用mask
+                    LA_Ms_cfg1_rmBG_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对去背景后的延迟相位彩色图像应用mask
+                    PRRc_rmBG(1:surface_pos-1, iX, :, iY) = 0;
+                end
+            end
+        end
+        
         % 写入 DCM 文件到 dcm 文件夹
         dicomwrite(uint8(255 * (cumLA_cfg1_avg / 2 + 0.5)), fullfile(dcm_dir, [name, '_2-1_cumLA-cfg1-', num2str(nr), 'repAvg.dcm']));
         dicomwrite(uint8(255 * cumLA_cfg_hsv), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));

@@ -1,8 +1,8 @@
  function outFrameWfilt = vWinAvgFiltOpt(inFrame,inWeight,kRL,kRU,Nsec)
     % input params
-    % inFrame  ==> ÊäÈë
-    % inWeight ==> ÖÃÐÅ¶È (Ä¬ÈÏ0~1)
-    % kRL/kRU  ==> ¸ßË¹ºË³ß´ç·¶Î§
+    % inFrame  ==> ï¿½ï¿½ï¿½ï¿½
+    % inWeight ==> ï¿½ï¿½ï¿½Å¶ï¿½ (Ä¬ï¿½ï¿½0~1)
+    % kRL/kRU  ==> ï¿½ï¿½Ë¹ï¿½Ë³ß´ç·¶Î§
     if nargin == 4, Nsec = kRU - kRL + 1; end
 
     [nZ,nX] = size(inFrame);
@@ -14,13 +14,13 @@
         return;
     end
 
-    % Ô¤Éú³ÉºË³ß´ç (Ç¿¶ÈµÍ -> ´óºË£¬Ç¿¶È¸ß -> Ð¡ºË)
+    % Ô¤ï¿½ï¿½ï¿½ÉºË³ß´ï¿½ (Ç¿ï¿½Èµï¿½ -> ï¿½ï¿½Ë£ï¿½Ç¿ï¿½È¸ï¿½ -> Ð¡ï¿½ï¿½)
     kRg = round(linspace(kRU,kRL,Nsec));
-    kRg = kRg + mod(kRg+1,2);              % µ÷ÕûÎªÆæÊý±ãÓÚ¶Ô³Æ´°¿Ú
+    kRg = kRg + mod(kRg+1,2);              % ï¿½ï¿½ï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¶Ô³Æ´ï¿½ï¿½ï¿½
     maxKer = max(kRg);
     maxRad = (maxKer - 1) / 2;
 
-    % ±ß½ç²ÉÓÃ replicate padding£¬±ÜÃâºÚ±ß
+    % ï¿½ß½ï¿½ï¿½ï¿½ï¿½ replicate paddingï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú±ï¿½
     inframe = padarray(inFrame,[maxRad maxRad],'replicate','both');
 
     gaussHs = cell(maxKer,1);
