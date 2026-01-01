@@ -21,7 +21,7 @@ end
 % 设置数据路径
 data_path   = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_3layer_3_13';
+output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_9layer_3_19';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -549,6 +549,13 @@ function rPSOCT_process_single_file(varargin)
             local_outputDopuThreshold = params.filters.output_dopu_threshold;
             local_enableBottomLayerPhaseReduction = params.filters.enable_bottom_layer_phase_reduction;
             local_bottomLayerDepth = params.filters.bottom_layer_depth;
+            local_adaptiveFilterBottomDepth = params.filters.adaptive_filter_bottom_depth;
+            % 从配置中读取底层DOPU阈值（用于Step 3.6），如果不存在则使用默认0.5
+            if isfield(params.filters, 'bottom_dopu_threshold')
+                local_bottomDopuThreshold = params.filters.bottom_dopu_threshold;
+            else
+                local_bottomDopuThreshold = 0.5;
+            end
             local_phV = single(phV);
             local_winG = single(winG);
             local_winG_whole = single(winG_whole);
@@ -620,7 +627,7 @@ function rPSOCT_process_single_file(varargin)
                         local_kRL_cfg1, local_kRU_cfg1, local_h1, local_h2, ...
                         local_Avnum, local_wovWinF, local_enableDopuPhaseSupp, verbose, ...
                         local_enableOutputAdaptive, local_kRL_output, local_kRU_output, ...
-                        local_outputDopuThreshold, local_enableBottomLayerPhaseReduction, local_bottomLayerDepth);
+                        local_outputDopuThreshold, local_enableBottomLayerPhaseReduction, local_bottomLayerDepth, local_adaptiveFilterBottomDepth, local_bottomDopuThreshold);
                 
                 % 存储到批次临时数组（使用 iY_local 作为索引）
                 batch_LA_c_cfg1_avg(:, :, :, iY_local) = LA_tmp;
@@ -717,7 +724,7 @@ function rPSOCT_process_single_file(varargin)
         end
         rotAngle = 440;
         % 仅输出 cfg1 avg 相关结果（当前仅支持 avg 路径）
-        PRRrg = [0 0.5];
+        PRRrg = params.polarization.PRRrg;
         writematrix(PRRrg, fullfile(dcm_dir, [name, '_2-0_PhRRg.txt']));
         
         % 生成彩色编码图像（直接写入 DCM，不生成多帧 TIFF）

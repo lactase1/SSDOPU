@@ -1,13 +1,23 @@
-function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold, enableOutputAdaptive, kRL_output, kRU_output, outputDopuThreshold, enableBottomLayerPhaseReduction, bottomLayerDepth)
-% FreeSpace_PSOCT_Optimized (重构优化版)
+function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimized(Qm, Um, Vm, Stru, test_seg_top, h1, h2, Avnum, dopuMap, enableDopuPhaseSupp, dopuThreshold, enableOutputAdaptive, kRL_output, kRU_output, outputDopuThreshold, enableBottomLayerPhaseReduction, bottomLayerDepth, adaptiveFilterBottomDepth, bottomDopuThreshold)
+% FreeSpace_PSOCT_Optimized (双层融合版)
+% 修复: 移除了导致垂直条纹的轴向惯性(Axial Inertia)逻辑，改用双层融合策略
 % 主要改进:
 %   1. 移除不稳定的 median(validDopu)*1.2 阈值自动计算
 %   2. 直接使用预处理 DOPU Map，移除循环内冗余计算
 %   3. 基于 DOPU 的自适应拟合策略（高 DOPU 小窗口，低 DOPU 大窗口+约束）
 %   4. 支持输出端自适应滤波：根据DOPU值动态调整光轴/延迟的滤波强度
-%   5. 支持底层相位延迟减小：在深层区域对低DOPU像素降低相位延迟50%
+%   5. 支持底层相位延迟减小：在深层区域对低DOPU像素降低相位延迟（基于绝对深度与配置的阈值）
+%   6. 支持分区域滤波：DOPU自适应滤波仅对底部指定层数生效 (基于绝对深度)
+%   7. 双层融合 (Dual-Layer Blending)：底部低DOPU区域使用稍大核的增强层与基础层融合，保留颗粒感同时抑制杂乱方向
+%   8. 统一输出自适应滤波逻辑，缩小核上限以避免底部过度平滑（视觉上更自然，与上方纹理一致）
 
     %% 参数默认值与初始化
+    if nargin < 19 || isempty(bottomDopuThreshold)
+        bottomDopuThreshold = 0.5; % 默认底层DOPU阈值
+    end
+    if nargin < 18 || isempty(adaptiveFilterBottomDepth)
+        adaptiveFilterBottomDepth = 120;  % 默认DOPU自适应滤波仅对底部120层生效（0表示全局生效）
+    end
     if nargin < 17 || isempty(bottomLayerDepth)
         bottomLayerDepth = 80;  % 默认底层深度为80层
     end
@@ -96,7 +106,6 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
     
     for j = 1:nX 
         surface_idx = test_seg_top(j);
-        
         for i = 1:output_depth
             windowData = squeeze(SmapF1(i:i+Avnum, j, :)); 
             
@@ -232,69 +241,126 @@ function [LA, PhR, cumLA, LA_raw, PhR_raw, cumLA_raw] = FreeSpace_PSOCT_Optimize
         end
     end
 
-    %% Step 3.6: 底层相位延迟减小
+    %% Step 3.6: 底层相位延迟减小 (修正为绝对深度)
     % 在底层深度区域，对低DOPU像素降低相位延迟50%，并进行平滑处理
     if enableBottomLayerPhaseReduction
-        % 确定底层区域的起始深度
-        bottomStartDepth = max(1, output_depth - bottomLayerDepth + 1);
+        % 使用 nZ (原始图像高度) 计算绝对深度阈值
+        absDepthThresh = max(1, nZ - bottomLayerDepth + 1);
         
-        % 裁剪DOPU图到与输出相同的深度
-        DopuF_cropped = DopuF(1:output_depth, :);
+        % 构建基于绝对深度的掩码
+        % 展平空间中：绝对深度 = 展平索引 + 表面位置 - 1
+        % 条件: FlattenZ + Top - 1 >= absDepthThresh
+        % 即: FlattenZ >= absDepthThresh - Top + 1
+        maskBottomRegion = false(output_depth, nX);
+        for j = 1:nX
+            top = test_seg_top(j);
+            startIdx = max(1, absDepthThresh - top + 1);
+            if startIdx <= output_depth
+                maskBottomRegion(startIdx:end, j) = true;
+            end
+        end
         
-        % 构建底层低DOPU掩码：底层区域 且 DOPU < 阈值
-        maskBottomLowDopu = false(output_depth, nX);
-        maskBottomLowDopu(bottomStartDepth:end, :) = ...
-            (DopuF_cropped(bottomStartDepth:end, :) > 0) & ...
-            (DopuF_cropped(bottomStartDepth:end, :) < dopuThreshold);
+        % 结合DOPU阈值（使用专门的底层DOPU阈值，来自配置）
+        maskBottomLowDopu = maskBottomRegion & (DopuF(1:output_depth, :) > 0) & (DopuF(1:output_depth, :) < bottomDopuThreshold);
         
-        % 创建减小因子图（50%减小 = 乘以0.5）
+        % 定义目标衰减强度 (0.1~0.2 之间效果最好，0.15 为青色，0.1 为蓝色)
+        targetScale = 0.15;  % 可根据需要微调（例如 0.15 推荐）
+        % 创建减小因子图（底层低DOPU区域使用 targetScale 衰减）
         reductionFactor = ones(output_depth, nX);
-        reductionFactor(maskBottomLowDopu) = 0.5;
+        reductionFactor(maskBottomLowDopu) = targetScale;
         
         % 对减小因子进行高斯平滑，避免突兀的边界
-        % 使用中等大小的高斯核进行平滑过渡
         smoothKernel = fspecial('gaussian', [7 7], 2.0);
         reductionFactor_smooth = imfilter(reductionFactor, smoothKernel, 'replicate');
         
-        % 应用平滑后的减小因子到相位延迟
+        % 将平滑结果限幅到 [targetScale, 1]，以避免平滑引入超出预期的极端值
+        reductionFactor_smooth = min(max(reductionFactor_smooth, targetScale), 1);
+        
+        % 应用平滑后的减小因子到相位延迟（保留底层纹理但降低亮度）
         phR = phR .* reductionFactor_smooth;
         phR_raw = phR_raw .* reductionFactor_smooth;
         phR_rmBG = phR_rmBG .* reductionFactor_smooth;
     end
 
-    %% Step 4: 空间滤波
+    %% Step 4: 空间滤波 (双层融合策略)
+    % 基础层 (Layer 1): 全图使用标准小核 h2 滤波，保持整体纹理一致性
+    % 增强层 (Layer 2): 使用稍大的核 h_strong 滤波，仅在底部低DOPU区域柔和融合
+    % 融合公式: final = base .* (1 - mask) + strong .* mask
+    
+    % --- Layer 1: 基础层滤波 (全图 h2) ---
+    [cumLA_bg_base] = filterVectorField(cumLA_bg, h2);
+    [cumLA_raw_base] = filterVectorField(cumLA_raw, h2);
+    phR_base      = imfilter(phR, h2, 'replicate');
+    phR_rmBG_base = imfilter(phR_rmBG, h2, 'replicate');
+    phR_raw_base  = imfilter(phR_raw, h2, 'replicate');
+    
     if enableOutputAdaptive
-        % 【新功能】混合滤波策略：根据DOPU阈值(0.4)选择滤波方式
-        % DOPU >= 0.4（高质量组织）：使用固定h2滤波，保留细节
-        % DOPU < 0.4（低质量/深层）：使用自适应DOPU滤波，从h2核大小开始根据DOPU向上调整核大小
+        % --- Layer 2: 增强层滤波 (全图 h_strong) ---
+        % h_strong 尺寸为 h2 的 1.5~2.0 倍，不要太大以避免塑料感
+        h2_size = size(h2, 1);
+        h_strong_size = round(h2_size * 1.8);  % 约 1.8 倍
+        if mod(h_strong_size, 2) == 0
+            h_strong_size = h_strong_size + 1;  % 确保为奇数
+        end
+        h_strong_sigma = h_strong_size / 5.5;  % sigma 适度增加
+        h_strong = fspecial('gaussian', [h_strong_size h_strong_size], h_strong_sigma);
         
-        % 【关键修复】裁剪DopuF到与输出数组相同的深度
+        [cumLA_bg_strong] = filterVectorField(cumLA_bg, h_strong);
+        [cumLA_raw_strong] = filterVectorField(cumLA_raw, h_strong);
+        phR_strong      = imfilter(phR, h_strong, 'replicate');
+        phR_rmBG_strong = imfilter(phR_rmBG, h_strong, 'replicate');
+        phR_raw_strong  = imfilter(phR_raw, h_strong, 'replicate');
+        
+        % --- 融合掩码 (Blending Mask) ---
+        % 复用 Step 3.6 的 maskBottomLowDopu 逻辑（底部 + 低DOPU）
+        % 如果 enableBottomLayerPhaseReduction 未启用，则在此处重新构建掩码
         DopuF_cropped = DopuF(1:output_depth, :);
         
-        % 【参数校验】确保 kRL_output < kRU_output，如果不满足则交换
-        if kRL_output >= kRU_output
-            warning('FreeSpace_PSOCT_Optimized: kRL_output(%d) >= kRU_output(%d)，自动交换', kRL_output, kRU_output);
-            temp = kRL_output;
-            kRL_output = kRU_output;
-            kRU_output = temp;
+        if ~exist('maskBottomLowDopu', 'var') || isempty(maskBottomLowDopu)
+            % 重新构建底部区域掩码
+            absDepthThresh_blend = max(1, nZ - adaptiveFilterBottomDepth + 1);
+            maskBottomRegion_blend = false(output_depth, nX);
+            for j = 1:nX
+                top = test_seg_top(j);
+                startIdx = max(1, absDepthThresh_blend - top + 1);
+                if startIdx <= output_depth
+                    maskBottomRegion_blend(startIdx:end, j) = true;
+                end
+            end
+            % 结合DOPU阈值
+            maskBottomLowDopu_blend = maskBottomRegion_blend & (DopuF_cropped > 0) & (DopuF_cropped < outputDopuThreshold);
+        else
+            maskBottomLowDopu_blend = maskBottomLowDopu;
         end
         
-        % 对向量场使用混合滤波策略（传入h2作为固定滤波核和DOPU阈值）
-        [cumLA_bg_gF] = filterVectorFieldAdaptive(cumLA_bg, DopuF_cropped, kRL_output, kRU_output, h2, outputDopuThreshold);
-        [cumLA_raw_gF] = filterVectorFieldAdaptive(cumLA_raw, DopuF_cropped, kRL_output, kRU_output, h2, outputDopuThreshold);
+        % --- 掩码羽化 (Feathering) ---
+        % 使用高斯模糊对掩码进行软化，避免融合边界生硬
+        featherKernel = fspecial('gaussian', [15 15], 4.0);
+        blendMask = double(maskBottomLowDopu_blend);
+        blendMask = imfilter(blendMask, featherKernel, 'replicate');
+        blendMask = min(max(blendMask, 0), 1);  % 确保在 [0, 1] 范围内
         
-        % 对标量场（延迟相位）使用固定滤波，不应用自适应DOPU滤波
-        phR_gF      = imfilter(phR, h2, 'replicate');
-        phR_rmBG_gF = imfilter(phR_rmBG, h2, 'replicate');
-        phR_raw_gF  = imfilter(phR_raw, h2, 'replicate');
+        % --- 双层融合 ---
+        % 相位延迟的融合（标量）
+        phR_gF      = phR_base .* (1 - blendMask) + phR_strong .* blendMask;
+        phR_rmBG_gF = phR_rmBG_base .* (1 - blendMask) + phR_rmBG_strong .* blendMask;
+        phR_raw_gF  = phR_raw_base .* (1 - blendMask) + phR_raw_strong .* blendMask;
+        
+        % 光轴向量的融合（需要重新归一化）
+        blendMask3 = repmat(blendMask, [1 1 3]);  % 扩展到3通道
+        cumLA_bg_blended = cumLA_bg_base .* (1 - blendMask3) + cumLA_bg_strong .* blendMask3;
+        cumLA_raw_blended = cumLA_raw_base .* (1 - blendMask3) + cumLA_raw_strong .* blendMask3;
+        
+        % 重新归一化光轴向量
+        cumLA_bg_gF = normalizeVectorField(cumLA_bg_blended);
+        cumLA_raw_gF = normalizeVectorField(cumLA_raw_blended);
     else
-        % 传统固定高斯滤波
-        [cumLA_bg_gF] = filterVectorField(cumLA_bg, h2);
-        [cumLA_raw_gF] = filterVectorField(cumLA_raw, h2);
-        
-        phR_gF      = imfilter(phR, h2, 'replicate');
-        phR_rmBG_gF = imfilter(phR_rmBG, h2, 'replicate');
-        phR_raw_gF  = imfilter(phR_raw, h2, 'replicate');
+        % 非自适应模式：直接使用基础层结果
+        cumLA_bg_gF = cumLA_bg_base;
+        cumLA_raw_gF = cumLA_raw_base;
+        phR_gF      = phR_base;
+        phR_rmBG_gF = phR_rmBG_base;
+        phR_raw_gF  = phR_raw_base;
     end
 
     %% Step 5: 三维光轴递推
@@ -435,6 +501,17 @@ function [V_out] = filterVectorField(V_in, h)
     V1 = imfilter(V_in(:,:,1), h, 'replicate');
     V2 = imfilter(V_in(:,:,2), h, 'replicate');
     V3 = imfilter(V_in(:,:,3), h, 'replicate');
+    normV = sqrt(V1.^2 + V2.^2 + V3.^2);
+    normV(normV==0) = 1;
+    V_out = cat(3, V1./normV, V2./normV, V3./normV);
+    V_out(isnan(V_out)) = 0;
+end
+
+%% 向量场归一化（用于融合后重新归一化）
+function [V_out] = normalizeVectorField(V_in)
+    V1 = V_in(:,:,1);
+    V2 = V_in(:,:,2);
+    V3 = V_in(:,:,3);
     normV = sqrt(V1.^2 + V2.^2 + V3.^2);
     normV(normV==0) = 1;
     V_out = cat(3, V1./normV, V2./normV, V3./normV);
