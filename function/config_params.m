@@ -70,7 +70,7 @@ params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂�
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置(MAX_AVNUM = 19)
-params.polarization.Avnum = 13;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum = 9;                 % DDG测试用平均层数(统一使用以保持一致性)
 params.polarization.enableDopuPhaseSupp = 0;  % 1: 使用DOPU自适应相位抑制; 0: 关闭该功能
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
@@ -78,7 +78,8 @@ params.polarization.enableDopuPhaseSupp = 0;  % 1: 使用DOPU自适应相位抑�
 params.polarization.kRL_cfg1 = 3;              % 配置1滤波核下限(减小以保持细节)
 params.polarization.kRU_cfg1 = 21;              % 配置1滤波核上限(适当增加覆盖范围)
 
-% （已移除配置2相关参数，当前仅使用配置1的滤波范围）
+% 相位延迟范围 (用于PhR彩色编码)
+params.polarization.PRRrg = [0.045 0.4];          % PhR范围 [最小值 最大值]
 
 %% ========== 高斯滤波核设置 ==========
 % 【优化说明】基于PS-OCT巩膜检测技术需求的参数调整：
@@ -93,11 +94,26 @@ params.filters.h1_sigma = 1.5;                % 高斯核1标准差 (降低以�
 params.filters.h1 = fspecial('gaussian', params.filters.h1_size, params.filters.h1_sigma);
 
 % 中尺度高斯核 (用于结构增强和背景平滑) - 背景优先
-params.filters.h2_size = [13 13];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
+params.filters.h2_size = [19 19];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
 params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以抑制深层噪声)
-% params.filters.h2_size = [13 13];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
-% params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以抑制深层噪声)
 params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
+
+% 【输出端自适应滤波参数】用于光轴和延迟结果的DOPU混合滤波策略
+% 策略说明：
+%   - DOPU >= 阈值（高质量组织）：使用固定h2滤波，保留细节
+%   - DOPU < 阈值（低质量/深层）：使用自适应滤波，从h2核大小开始根据DOPU向上调整核大小
+params.filters.enable_output_adaptive = 1;     % 1: 启用输出端混合滤波; 0: 使用传统固定h2滤波
+params.filters.output_dopu_threshold = 0.35;    % DOPU阈值，区分高低质量区域（典型值0.3-0.5）
+params.filters.kRL_output = 13;                % 自适应滤波核下限（通常设为h2核大小，作为低DOPU区域的起始核）
+params.filters.kRU_output = 31;                % 自适应滤波核上限（DOPU=0时的最大核，用于低DOPU区域）
+params.filters.adaptive_filter_bottom_depth = 80;  % DOPU自适应滤波仅对底部多少层生效（0表示全局生效，>0表示仅底部N层生效）
+
+% 【底层相位延迟减小参数】用于深层区域的相位延迟降噪
+% 在底层区域，对低DOPU像素降低相位延迟值以抑制噪声，提高深层成像质量
+params.filters.enable_bottom_layer_phase_reduction = 1;  % 1: 启用底层相位延迟减小; 0: 禁用
+params.filters.bottom_layer_depth = 120;        % 底层深度范围（从底部开始向上的层数）
+params.filters.bottom_phase_reduction_ratio = 2;  % 相位延迟减小比例（0.5表示减小50%）
+params.filters.bottom_dopu_threshold = 0.35;    % 底层DOPU阈值（小于此值的像素会被减小相位延迟）
 
 % （已删除若干未使用的注释/备用参数，以保持配置简洁）
 
@@ -116,9 +132,32 @@ params.logging.verbose = 0;
 % 检查滤波核范围参数
 if params.polarization.kRL_cfg1 >= params.polarization.kRU_cfg1
     warning('配置1滤波核范围设置有误: kRL_cfg1应小于kRU_cfg1');
+    % 自动修正：交换值
+    temp = params.polarization.kRL_cfg1;
+    params.polarization.kRL_cfg1 = params.polarization.kRU_cfg1;
+    params.polarization.kRU_cfg1 = temp;
+    fprintf('已自动修正: kRL_cfg1=%d, kRU_cfg1=%d\n', params.polarization.kRL_cfg1, params.polarization.kRU_cfg1);
+end
+
+% 检查输出滤波核范围参数
+if params.filters.kRL_output >= params.filters.kRU_output
+    warning('输出滤波核范围设置有误: kRL_output应小于kRU_output');
+    % 自动修正：交换值
+    temp = params.filters.kRL_output;
+    params.filters.kRL_output = params.filters.kRU_output;
+    params.filters.kRU_output = temp;
+    fprintf('已自动修正: kRL_output=%d, kRU_output=%d\n', params.filters.kRL_output, params.filters.kRU_output);
 end
 
 % （配置2 已弃用，相关检查移除）
+
+% 调试输出：打印关键滤波参数
+if params.logging.verbose >= 1
+    fprintf('\n=== 关键滤波参数 ===\n');
+    fprintf('kRL_cfg1 = %d, kRU_cfg1 = %d\n', params.polarization.kRL_cfg1, params.polarization.kRU_cfg1);
+    fprintf('kRL_output = %d, kRU_output = %d\n', params.filters.kRL_output, params.filters.kRU_output);
+    fprintf('=====================\n\n');
+end
 
 % % 检查处理范围参数
 % if params.range.czrg_start >= params.range.czrg_end
@@ -147,7 +186,23 @@ if nargout == 0
     fprintf('DOPU计算方法: avg (固定)\n');
     fprintf('滤波模式: %s\n', iif(params.mode.wovWinF, '固定高斯', '自适应DOPU'));
     fprintf('平均层数 (Avnum): %d\n', params.polarization.Avnum);
+    fprintf('相位延迟范围 (PRRrg): [%.2f %.2f]\n', params.polarization.PRRrg(1), params.polarization.PRRrg(2));
     fprintf('展平并生成 En-face: %s\n', iif(params.processing.enable_flatten_enface, '启用', '禁用'));
-        fprintf('DOPU相位抑制: %s\n', iif(params.polarization.enableDopuPhaseSupp, '启用', '禁用'));
+    fprintf('DOPU相位抑制: %s\n', iif(params.polarization.enableDopuPhaseSupp, '启用', '禁用'));
+    fprintf('输出端自适应滤波: %s', iif(params.filters.enable_output_adaptive, '启用', '禁用'));
+    if params.filters.enable_output_adaptive
+        fprintf(' (kR范围: %d~%d)\n', params.filters.kRL_output, params.filters.kRU_output);
+    else
+        fprintf('\n');
+    end
+    fprintf('底层相位延迟减小: %s', iif(params.filters.enable_bottom_layer_phase_reduction, '启用', '禁用'));
+    if params.filters.enable_bottom_layer_phase_reduction
+        fprintf(' (深度: %d层, 减小: %d%%, DOPU阈值: %.2f)\n', ...
+            params.filters.bottom_layer_depth, ...
+            round(params.filters.bottom_phase_reduction_ratio * 100), ...
+            params.filters.bottom_dopu_threshold);
+    else
+        fprintf('\n');
+    end
     fprintf('==========================\n\n');
 end

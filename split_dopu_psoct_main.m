@@ -21,7 +21,7 @@ end
 % 设置数据路径
 data_path   = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output/dopu_13layer_3_13';
+output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_9layer_3_19';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -543,6 +543,19 @@ function rPSOCT_process_single_file(varargin)
             local_Avnum = params.polarization.Avnum;
             local_wovWinF = params.mode.wovWinF;
             local_enableDopuPhaseSupp = params.polarization.enableDopuPhaseSupp;
+            local_enableOutputAdaptive = params.filters.enable_output_adaptive;
+            local_kRL_output = params.filters.kRL_output;
+            local_kRU_output = params.filters.kRU_output;
+            local_outputDopuThreshold = params.filters.output_dopu_threshold;
+            local_enableBottomLayerPhaseReduction = params.filters.enable_bottom_layer_phase_reduction;
+            local_bottomLayerDepth = params.filters.bottom_layer_depth;
+            local_adaptiveFilterBottomDepth = params.filters.adaptive_filter_bottom_depth;
+            % 从配置中读取底层DOPU阈值（用于Step 3.6），如果不存在则使用默认0.5
+            if isfield(params.filters, 'bottom_dopu_threshold')
+                local_bottomDopuThreshold = params.filters.bottom_dopu_threshold;
+            else
+                local_bottomDopuThreshold = 0.5;
+            end
             local_phV = single(phV);
             local_winG = single(winG);
             local_winG_whole = single(winG_whole);
@@ -612,7 +625,9 @@ function rPSOCT_process_single_file(varargin)
                 [LA_tmp, PhR_tmp, cumLA_tmp, LA_rmBG_tmp, PhR_rmBG_tmp, cumLA_rmBG_tmp] = ...
                     calLAPhRALL(IMG_ch1, IMG_ch2, local_topLine, dopu_splitSpec_M, ...
                         local_kRL_cfg1, local_kRU_cfg1, local_h1, local_h2, ...
-                        local_Avnum, local_wovWinF, local_enableDopuPhaseSupp, verbose);
+                        local_Avnum, local_wovWinF, local_enableDopuPhaseSupp, verbose, ...
+                        local_enableOutputAdaptive, local_kRL_output, local_kRU_output, ...
+                        local_outputDopuThreshold, local_enableBottomLayerPhaseReduction, local_bottomLayerDepth, local_adaptiveFilterBottomDepth, local_bottomDopuThreshold);
                 
                 % 存储到批次临时数组（使用 iY_local 作为索引）
                 batch_LA_c_cfg1_avg(:, :, :, iY_local) = LA_tmp;
@@ -700,7 +715,7 @@ function rPSOCT_process_single_file(varargin)
 
         % 对1-4 DOPU图像应用阈值过滤（只保留前300层）
         dopu_thresholded = dopu_splitSpectrum(1:nZ_save, :, :);
-        dopu_thresholded(dopu_thresholded <= 0.45) = 0;  % 小于等于0.5的设为0
+        dopu_thresholded(dopu_thresholded <= 0.38) = 0;  % 小于等于0.5的设为0
 
         dicomwrite(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), fullfile(dcm_dir, [name, '_1-4_dopu_SS.dcm']));
         
@@ -709,7 +724,7 @@ function rPSOCT_process_single_file(varargin)
         end
         rotAngle = 440;
         % 仅输出 cfg1 avg 相关结果（当前仅支持 avg 路径）
-        PRRrg = [0 0.5];
+        PRRrg = params.polarization.PRRrg;
         writematrix(PRRrg, fullfile(dcm_dir, [name, '_2-0_PhRRg.txt']));
         
         % 生成彩色编码图像（直接写入 DCM，不生成多帧 TIFF）
@@ -731,6 +746,27 @@ function rPSOCT_process_single_file(varargin)
             cumLA_Ms_cfg1_rmBG_hsv(:, :, :, iY) = quColoring(cumLA_Ms_cfg1_rmBG(:, :, :, iY), rotAngle);
             LA_Ms_cfg1_rmBG_hsv(:, :, :, iY) = quColoring(LA_Ms_cfg1_rmBG(:, :, :, iY), rotAngle);
             PRRc_rmBG(:, :, :, iY) = uint8(ind2rgb(uint8(mat2gray(PhR_Ms_cfg1_rmBG(:, :, iY), PRRrg) * 256), parula(256)) * 256);
+        end
+        
+        % 应用边界mask：将边界以上的区域设为纯黑色（只处理前nZ_save层）
+        for iY = 1:nY
+            for iX = 1:size(cumLA_cfg_hsv, 2)
+                surface_pos = round(topLines(iX, iY));
+                if surface_pos > 1 && surface_pos <= nZ_save
+                    % 对累积光轴HSV图像应用mask
+                    cumLA_cfg_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对局部光轴HSV图像应用mask
+                    LA_cfg_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对延迟相位彩色图像应用mask
+                    PRRc(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对去背景后的累积光轴HSV图像应用mask
+                    cumLA_Ms_cfg1_rmBG_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对去背景后的局部光轴HSV图像应用mask
+                    LA_Ms_cfg1_rmBG_hsv(1:surface_pos-1, iX, :, iY) = 0;
+                    % 对去背景后的延迟相位彩色图像应用mask
+                    PRRc_rmBG(1:surface_pos-1, iX, :, iY) = 0;
+                end
+            end
         end
         
         % 写入 DCM 文件到 dcm 文件夹
