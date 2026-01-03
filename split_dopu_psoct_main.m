@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep';
+data_path   = 'C:\yongxin.wang/Data/Process_Data/Disk';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang/Data/Process_Data/Optic_Disc_rep/Output-dopu-adj/dopu_9layer_3_19';
+output_base = 'C:\yongxin.wang/Data/Process_Data/Disk/Output-dopu-adj/ddg_3layer_3_19';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -442,6 +442,83 @@ function rPSOCT_process_single_file(varargin)
         Strus = zeros(numel(czrg), nX, nY);
         Stru_OAC = Strus;
         dopu_splitSpectrum = zeros(numel(czrg), nX, nY);
+        
+        % ========== 加载后巩膜边界数据（如果配置了路径）==========
+        sclera_boundary_data = [];  % 初始化为空
+        has_sclera_boundary = false;
+        
+        if isfield(params, 'files') && isfield(params.files, 'sclera_boundary_path') && ~isempty(params.files.sclera_boundary_path)
+            sclera_boundary_file = params.files.sclera_boundary_path;
+            
+            if exist(sclera_boundary_file, 'file')
+                fprintf('\n========== 加载后巩膜边界数据 ==========\n');
+                fprintf('文件路径: %s\n', sclera_boundary_file);
+                
+                try
+                    % 确定变量名（默认与topLines相同的变量名，或使用配置的变量名）
+                    if isfield(params.files, 'sclera_boundary_var') && ~isempty(params.files.sclera_boundary_var)
+                        var_name = params.files.sclera_boundary_var;
+                    else
+                        % 默认尝试常见的变量名
+                        var_name = 'bottomLines';  % 默认名称
+                        % 检查文件中是否存在该变量，如果不存在则尝试其他名称
+                        mat_info = whos('-file', sclera_boundary_file);
+                        var_names = {mat_info.name};
+                        
+                        common_names = {'bottomLines', 'scleraLines', 'boundary', 'layer', 'sclera_line', 'topLines'};
+                        found = false;
+                        for k = 1:length(common_names)
+                            if ismember(common_names{k}, var_names)
+                                var_name = common_names{k};
+                                found = true;
+                                break;
+                            end
+                        end
+                        
+                        % 如果都没找到，使用第一个变量
+                        if ~found && ~isempty(var_names)
+                            var_name = var_names{1};
+                        end
+                    end
+                    
+                    % 加载边界数据（参考topLines的加载方式）
+                    loaded_data = load(sclera_boundary_file, var_name);
+                    
+                    % 直接获取加载的变量
+                    if isfield(loaded_data, var_name)
+                        sclera_boundary_data = loaded_data.(var_name);
+                        fprintf('成功从变量 "%s" 加载边界数据\n', var_name);
+                        
+                        % 转换为double（与topLines处理一致）
+                        sclera_boundary_data = double(sclera_boundary_data);
+                        
+                        % 确保边界值合理（与topLines一致）
+                        sclera_boundary_data(sclera_boundary_data <= 1) = 1;
+                        
+                        % 显示加载信息
+                        fprintf('边界数据维度: [%s]\n', num2str(size(sclera_boundary_data)));
+                        fprintf('边界范围: %.1f ~ %.1f\n', min(sclera_boundary_data(:)), max(sclera_boundary_data(:)));
+                        fprintf('后巩膜边界数据加载成功！\n');
+                        fprintf('======================================\n\n');
+                        
+                        has_sclera_boundary = true;
+                    else
+                        warning('变量 "%s" 加载失败', var_name);
+                        sclera_boundary_data = [];
+                        has_sclera_boundary = false;
+                    end
+                    
+                catch ME
+                    warning('加载后巩膜边界数据失败: %s', ME.message);
+                    fprintf('错误详情: %s\n', ME.getReport());
+                    sclera_boundary_data = [];
+                    has_sclera_boundary = false;
+                end
+            else
+                warning('后巩膜边界文件不存在: %s', sclera_boundary_file);
+            end
+        end
+        
         fprintf('开始处理 %d 个B-Scan...\n', nY);
         % ========================= 分批流式处理架构 =========================
         % 修改目标:
@@ -887,6 +964,95 @@ function rPSOCT_process_single_file(varargin)
         end
         fprintf('\n  PhR 展平完成，耗时: %.2f 秒\n', toc(t_flatten));
         
+        %% ========== 步骤2a: 基于后巩膜边界展平数据（如果有） ==========
+        if has_sclera_boundary
+            fprintf('\n========== 基于后巩膜边界展平数据 ==========\n');
+            
+            % 使用后巩膜边界代替表面边界进行展平
+            sclera_boundary_round = round(sclera_boundary_data);  % [nX, nY]
+            
+            % (1) 展平 Struc - 基于后巩膜边界对齐
+            fprintf('基于后巩膜边界展平 Struc 数据...\n');
+            t_sclera_flatten = tic;
+            Struc_sclera_flat = zeros(nZ_flatten, nX, nY, 'single');
+            
+            for iy = 1:nY
+                if mod(iy, max(1, floor(nY/5))) == 0 || iy == nY
+                    print_progress(iy, nY, 'Struc_sclera', 20);
+                end
+                for ix = 1:nX
+                    sclera_z = sclera_boundary_round(ix, iy);
+                    sclera_z = max(1, min(nZ_orig, sclera_z));
+                    
+                    % 将后巩膜边界对齐到固定深度（第1层）
+                    target_sclera_z = 1;
+                    shift = target_sclera_z - sclera_z;
+                    
+                    % 复制并平移数据
+                    for z = 1:nZ_flatten
+                        z_src = z - shift;
+                        if z_src >= 1 && z_src <= nZ_orig
+                            Struc_sclera_flat(z, ix, iy) = Struc_3D_orig(z_src, ix, iy);
+                        end
+                    end
+                end
+            end
+            fprintf('\n  Struc (后巩膜) 展平完成，耗时: %.2f 秒\n', toc(t_sclera_flatten));
+            
+            % (2) 展平 cumLA - 基于后巩膜边界
+            fprintf('基于后巩膜边界展平 cumLA 数据...\n');
+            t_sclera_cumla = tic;
+            cumLA_sclera_flat = zeros(nZ_cumLA_flatten, nX, 3, nY, 'single');
+            
+            for iy = 1:nY
+                if mod(iy, max(1, floor(nY/5))) == 0 || iy == nY
+                    print_progress(iy, nY, 'cumLA_sclera', 20);
+                end
+                for ix = 1:nX
+                    sclera_z = sclera_boundary_round(ix, iy);
+                    sclera_z = max(1, min(nZ_orig, sclera_z));
+                    
+                    target_sclera_z = 1;
+                    shift = target_sclera_z - sclera_z;
+                    
+                    for z = 1:nZ_cumLA_flatten
+                        z_src = z - shift - Avnum;
+                        if z_src >= 1 && z_src <= nZ_cumLA
+                            cumLA_sclera_flat(z, ix, :, iy) = cumLA_cfg_hsv(z_src, ix, :, iy);
+                        end
+                    end
+                end
+            end
+            fprintf('\n  cumLA (后巩膜) 展平完成，耗时: %.2f 秒\n', toc(t_sclera_cumla));
+            
+            % (3) 展平 PhR - 基于后巩膜边界
+            fprintf('基于后巩膜边界展平 PhR 数据...\n');
+            t_sclera_phr = tic;
+            PhR_sclera_flat = zeros(nZ_PhR_flatten, nX, 3, nY, 'uint8');
+            
+            for iy = 1:nY
+                if mod(iy, max(1, floor(nY/5))) == 0 || iy == nY
+                    print_progress(iy, nY, 'PhR_sclera', 20);
+                end
+                for ix = 1:nX
+                    sclera_z = sclera_boundary_round(ix, iy);
+                    sclera_z = max(1, min(nZ_orig, sclera_z));
+                    
+                    target_sclera_z = 1;
+                    shift = target_sclera_z - sclera_z;
+                    
+                    for z = 1:nZ_PhR_flatten
+                        z_src = z - shift - Avnum;
+                        if z_src >= 1 && z_src <= nZ_PhR
+                            PhR_sclera_flat(z, ix, :, iy) = PRRc(z_src, ix, :, iy);
+                        end
+                    end
+                end
+            end
+            fprintf('\n  PhR (后巩膜) 展平完成，耗时: %.2f 秒\n', toc(t_sclera_phr));
+            fprintf('========== 后巩膜边界展平完成 ==========\n\n');
+        end
+        
         %% ========== 步骤2: 保存展平后的 DCM（生成新文件，命名中加上 flat） ==========
         fprintf('\n保存展平后的 DCM 文件...\n');
         
@@ -899,6 +1065,23 @@ function rPSOCT_process_single_file(varargin)
         
         % 保存展平后的 PhR（新文件，加上 flat 标识）
         dicomwrite(PhR_flat, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg_flat.dcm']));
+        
+        % 如果有后巩膜边界展平数据，也保存这些文件
+        if has_sclera_boundary
+            fprintf('保存后巩膜边界展平的 DCM 文件...\n');
+            
+            % 保存后巩膜展平的 Struc
+            Struc_sclera_flat_4d = permute(Struc_sclera_flat, [1, 2, 4, 3]);
+            dicomwrite(uint8(255 * Struc_sclera_flat_4d), fullfile(dcm_dir, [name, '_1-1_Struc_sclera_flat.dcm']));
+            
+            % 保存后巩膜展平的 cumLA
+            dicomwrite(uint8(255 * cumLA_sclera_flat), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring_sclera_flat.dcm']));
+            
+            % 保存后巩膜展平的 PhR
+            dicomwrite(PhR_sclera_flat, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg_sclera_flat.dcm']));
+            
+            fprintf('后巩膜边界展平的 DCM 保存完成\n');
+        end
         
         fprintf('展平后的 DCM 保存完成\n');
         
@@ -1038,6 +1221,76 @@ function rPSOCT_process_single_file(varargin)
         
         % 释放大数组
         clear PhR_flat PRRc_rmBG LA_cfg_hsv LA_Ms_cfg1_rmBG_hsv enface_phr_stack;
+    end
+    
+    %% ========== 步骤4: 从后巩膜边界展平数据生成 En-face（如果有）==========
+    if has_sclera_boundary
+        fprintf('\n========== 基于后巩膜边界生成 En-face 切片 ==========\n');
+        
+        % 6. Struc En-face - 基于后巩膜边界展平
+        fprintf('从后巩膜展平 Struc 数据生成 En-face...\n');
+        t_struc_sclera = tic;
+        [nZ_sclera_struc, nX_sclera_struc, nY_sclera_struc] = size(Struc_sclera_flat);
+        
+        enface_struc_sclera_stack = zeros(nY_sclera_struc, nX_sclera_struc, 1, nZ_sclera_struc, 'uint8');
+        
+        for z = 1:nZ_sclera_struc
+            if mod(z, max(1, floor(nZ_sclera_struc/5))) == 0 || z == nZ_sclera_struc
+                print_progress(z, nZ_sclera_struc, 'Struc_sclera', 20);
+            end
+            
+            % 从展平数据直接提取 [X, Y] 切片，转置为 [Y, X]
+            en_face_slice = squeeze(Struc_sclera_flat(z, :, :))';  % [Y, X]
+            enface_struc_sclera_stack(:, :, 1, z) = uint8(255 * en_face_slice);
+        end
+        
+        dicomwrite(enface_struc_sclera_stack, fullfile(dcm_dir, [name, '_4-1_Enface_Struc_sclera_flat.dcm']));
+        fprintf('\n  Struc (后巩膜) En-face 耗时: %.2f 秒\n', toc(t_struc_sclera));
+        clear enface_struc_sclera_stack Struc_sclera_flat;
+        
+        % 7. cumLA En-face - 基于后巩膜边界展平
+        fprintf('从后巩膜展平 cumLA 数据生成 En-face...\n');
+        t_cumla_sclera = tic;
+        [nZ_sclera_cumLA, nX_sclera_cumLA, ~, nY_sclera_cumLA] = size(cumLA_sclera_flat);
+        
+        enface_cumla_sclera_stack = zeros(nY_sclera_cumLA, nX_sclera_cumLA, 3, nZ_sclera_cumLA, 'uint8');
+        
+        for z = 1:nZ_sclera_cumLA
+            if mod(z, max(1, floor(nZ_sclera_cumLA/5))) == 0 || z == nZ_sclera_cumLA
+                print_progress(z, nZ_sclera_cumLA, 'cumLA_sclera', 20);
+            end
+            
+            % 从展平数据直接提取 [X, 3, Y] 切片，重排为 [Y, X, 3]
+            slice_rgb = permute(squeeze(cumLA_sclera_flat(z, :, :, :)), [3, 1, 2]);  % [Y, X, 3]
+            enface_cumla_sclera_stack(:, :, :, z) = uint8(255 * slice_rgb);
+        end
+        
+        dicomwrite(enface_cumla_sclera_stack, fullfile(dcm_dir, [name, '_4-2_Enface_cumLA_sclera_flat.dcm']));
+        fprintf('\n  cumLA (后巩膜) En-face 耗时: %.2f 秒\n', toc(t_cumla_sclera));
+        clear enface_cumla_sclera_stack cumLA_sclera_flat;
+        
+        % 8. PhR En-face - 基于后巩膜边界展平
+        fprintf('从后巩膜展平 PhR 数据生成 En-face...\n');
+        t_phr_sclera = tic;
+        [nZ_sclera_PhR, nX_sclera_PhR, ~, nY_sclera_PhR] = size(PhR_sclera_flat);
+        
+        enface_phr_sclera_stack = zeros(nY_sclera_PhR, nX_sclera_PhR, 3, nZ_sclera_PhR, 'uint8');
+        
+        for z = 1:nZ_sclera_PhR
+            if mod(z, max(1, floor(nZ_sclera_PhR/5))) == 0 || z == nZ_sclera_PhR
+                print_progress(z, nZ_sclera_PhR, 'PhR_sclera', 20);
+            end
+            
+            % 从展平数据直接提取 [X, 3, Y] 切片，重排为 [Y, X, 3]
+            slice_rgb = permute(squeeze(PhR_sclera_flat(z, :, :, :)), [3, 1, 2]);  % [Y, X, 3]
+            enface_phr_sclera_stack(:, :, :, z) = slice_rgb;
+        end
+        
+        dicomwrite(enface_phr_sclera_stack, fullfile(dcm_dir, [name, '_4-3_Enface_PhR_sclera_flat.dcm']));
+        fprintf('\n  PhR (后巩膜) En-face 耗时: %.2f 秒\n', toc(t_phr_sclera));
+        clear enface_phr_sclera_stack PhR_sclera_flat;
+        
+        fprintf('========== 后巩膜边界 En-face 生成完成 ==========\n');
     end
     else
         fprintf('\n跳过展平及 En-face 生成功能 (enable_flatten_enface = 0)\n');
