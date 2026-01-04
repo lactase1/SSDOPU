@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang/Data/Process_Data/Disk';
+data_path   = 'C:\yongxin.wang/Data/Select_Data/Enface_Data/jian';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang/Data/Process_Data/Disk/Output-dopu-adj/ddg_3layer_3_19';
+output_base = 'D:\1-Liu Jian\yongxin.wang\Output/ddg_3layer_3_19';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -44,6 +44,18 @@ else
         fprintf('[%d] %s\n', i, oct_files(i).name);
     end
     
+    % 在批处理模式下创建本次运行的根输出目录（便于管理多个文件的输出）
+    if length(oct_files) > 1
+        run_tag = datestr(now,'yyyymmdd_HHMMSS');
+        run_output_base = fullfile(output_base, ['run_' run_tag]);
+        if ~exist(run_output_base, 'dir')
+            mkdir(run_output_base);
+        end
+        fprintf('创建本次批处理输出根目录: %s\n', run_output_base);
+    else
+        run_output_base = output_base;
+    end
+
     % 逐个处理文件
     for i = 1:length(oct_files)
         full_path = fullfile(data_path, oct_files(i).name);
@@ -55,8 +67,8 @@ else
             % 记录开始时间
             tic;
             
-            % 调用单文件处理函数
-            rPSOCT_process_single_file(full_path, output_base);
+            % 调用单文件处理函数（传入本次运行的根输出目录 run_output_base）
+            rPSOCT_process_single_file(full_path, run_output_base);
             
             % 计算并显示处理时间
             proc_time = toc;
@@ -120,9 +132,13 @@ function rPSOCT_process_single_file(varargin)
 
     % 如果输出路径名遵循 'dopu_<N>layer[_<sigma>_<size>]' 约定，则从路径解析并覆盖部分参数
     try
-        [~, outbase_name, ~] = fileparts(output_base);
-        updates = struct();
-        wrote_any = false;
+            % 允许传入 run_output_base（例如 .../run_YYYY），若发现目录名以 'run_' 开头，则改用父目录名进行解析
+            root_output_for_parsing = output_base;
+            [~, possible_name, ~] = fileparts(root_output_for_parsing);
+            if startsWith(possible_name, 'run_')
+                root_output_for_parsing = fileparts(root_output_for_parsing);
+            end
+            [~, outbase_name, ~] = fileparts(root_output_for_parsing);
         
         % 根据输出目录名决定滤波模式：包含 'dopu' 则使用自适应DOPU (wovWinF = 0)，否则（例如 DDG）切换到固定高斯 (wovWinF = 1)
         if contains(outbase_name, 'dopu', 'IgnoreCase', true)
@@ -399,8 +415,43 @@ function rPSOCT_process_single_file(varargin)
 
     %(b) Calculates the Cumulative Stokes parameters I,Q,U,V
     for nr = nR
-        foutputdir = output_base;
-        if ~exist(foutputdir, 'dir'), mkdir(foutputdir); end
+        % 生成清晰的输出目录（每个输入文件单独子目录）
+        % 默认行为： output_base/<filename>；若存在则在名称后附加时间戳，除非在配置中设置 params.processing.overwrite_output = true
+        try
+            if ~isfield(params, 'processing') || ~isfield(params.processing, 'output_subdir_unique')
+                % 默认启用每文件子目录
+                params.processing.output_subdir_unique = true;
+            end
+            if ~isfield(params.processing, 'overwrite_output')
+                params.processing.overwrite_output = false;
+            end
+        catch
+            % 忽略错误，使用默认行为
+        end
+
+        if params.processing.output_subdir_unique
+            base_name = name;
+            candidate_dir = fullfile(output_base, base_name);
+            if exist(candidate_dir, 'dir')
+                if params.processing.overwrite_output
+                    foutputdir = candidate_dir;
+                    fprintf('输出目录已存在，且配置允许覆盖：%s\n', foutputdir);
+                else
+                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                    foutputdir = fullfile(output_base, [base_name '_' timestamp]);
+                    fprintf('输出目录已存在，使用新的目录: %s\n', foutputdir);
+                end
+            else
+                foutputdir = candidate_dir;
+            end
+            if ~exist(foutputdir, 'dir')
+                mkdir(foutputdir);
+            end
+        else
+            % 使用共享 output_base 目录
+            foutputdir = output_base;
+            if ~exist(foutputdir, 'dir'), mkdir(foutputdir); end
+        end
 
         czrg = 1:320; % set z range
         topLines = ones(nX, nY);
