@@ -29,16 +29,16 @@ params.processing.useref = 1;                  % 参考信号模式 (1:使用前
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
 params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
-params.processing.enable_flatten_enface = 0;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
+params.processing.enable_flatten_enface = 1;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
 params.processing.enable_enface_noflat = 0;    % 1: 生成非展平En-face切片（直接从原始数据切片）, 0: 禁用
-params.processing.max_frames = 35;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 params.parallel.batchSize = 500;
 
 %% ========== 并行处理设置 ==========
 params.parallel.LocalUseMpiexec = false;       % 并行处理MPI设置
 % 可选：限制并行池最大 worker 数 (0 表示由代码自动选择)
-params.parallel.maxWorkers = 35;
+params.parallel.maxWorkers = 45;
 % 并行相关资源限制: 最大可用内存 (GB) 用于一次性预加载阈值
 params.parallel.maxMemGB = 100;
 % 是否在函数结束时自动关闭并行池 (false = 保持池存活以节省启动时间)
@@ -46,7 +46,7 @@ params.parallel.autoClosePool = false;
 
 %% ========== 处理模式配置 ==========
 % 处理模式配置（当前仅保留滤波模式选项）
-params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
+params.mode.wovWinF = 1;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
@@ -70,7 +70,7 @@ params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂�
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置(MAX_AVNUM = 19)
-params.polarization.Avnum = 9;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum = 3;                 % DDG测试用平均层数(统一使用以保持一致性)
 params.polarization.enableDopuPhaseSupp = 0;  % 1: 使用DOPU自适应相位抑制; 0: 关闭该功能
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
@@ -79,7 +79,7 @@ params.polarization.kRL_cfg1 = 3;              % 配置1滤波核下限(减小�
 params.polarization.kRU_cfg1 = 21;              % 配置1滤波核上限(适当增加覆盖范围)
 
 % 相位延迟范围 (用于PhR彩色编码)
-params.polarization.PRRrg = [0.045 0.4];          % PhR范围 [最小值 最大值]
+params.polarization.PRRrg = [0.06 0.35];          % PhR范围 [最小值 最大值]
 
 %% ========== 高斯滤波核设置 ==========
 % 【优化说明】基于PS-OCT巩膜检测技术需求的参数调整：
@@ -102,7 +102,7 @@ params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.
 % 策略说明：
 %   - DOPU >= 阈值（高质量组织）：使用固定h2滤波，保留细节
 %   - DOPU < 阈值（低质量/深层）：使用自适应滤波，从h2核大小开始根据DOPU向上调整核大小
-params.filters.enable_output_adaptive = 1;     % 1: 启用输出端混合滤波; 0: 使用传统固定h2滤波
+params.filters.enable_output_adaptive = 0;     % 1: 启用输出端混合滤波; 0: 使用传统固定h2滤波
 params.filters.output_dopu_threshold = 0.35;    % DOPU阈值，区分高低质量区域（典型值0.3-0.5）
 params.filters.kRL_output = 13;                % 自适应滤波核下限（通常设为h2核大小，作为低DOPU区域的起始核）
 params.filters.kRU_output = 31;                % 自适应滤波核上限（DOPU=0时的最大核，用于低DOPU区域）
@@ -110,7 +110,7 @@ params.filters.adaptive_filter_bottom_depth = 80;  % DOPU自适应滤波仅对�
 
 % 【底层相位延迟减小参数】用于深层区域的相位延迟降噪
 % 在底层区域，对低DOPU像素降低相位延迟值以抑制噪声，提高深层成像质量
-params.filters.enable_bottom_layer_phase_reduction = 1;  % 1: 启用底层相位延迟减小; 0: 禁用
+params.filters.enable_bottom_layer_phase_reduction = 0;  % 1: 启用底层相位延迟减小; 0: 禁用
 params.filters.bottom_layer_depth = 120;        % 底层深度范围（从底部开始向上的层数）
 params.filters.bottom_phase_reduction_ratio = 2;  % 相位延迟减小比例（0.5表示减小50%）
 params.filters.bottom_dopu_threshold = 0.35;    % 底层DOPU阈值（小于此值的像素会被减小相位延迟）
@@ -122,6 +122,12 @@ params.filters.bottom_dopu_threshold = 0.35;    % 底层DOPU阈值（小于此�
 params.surface.surf_threshold = 0.20;          % 表面检测阈值(略降低以检测更多细微结构)
 params.surface.median_window = 7;              % 中值滤波窗口大小(减小以保持边界清晰)
 params.surface.smooth_window = 9;              % 平滑滤波窗口大小(减小以保持局部特征)
+
+%% ========== 后巩膜边界处理参数 ==========
+% 后巩膜边界文件路径（MAT文件）
+params.files.sclera_boundary_path = 'C:\yongxin.wang\Data\Process_Data\Disk\sclera_boundary.mat';  % 留空则不处理；设置完整路径则启用
+% MAT文件中的变量名（可选，留空则自动探测）
+params.files.sclera_boundary_var = '';   % 例如: 'boundary', 'layer', 'sclera_line' 等
 
 %% ========== 日志与调试设置 ==========
 % 全局日志等级: 0 = 静默 (默认), 1 = 简短, 2 = 详细

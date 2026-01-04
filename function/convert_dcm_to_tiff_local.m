@@ -101,14 +101,12 @@ function convert_dcm_to_tiff_local(dcm_folder, target_frame, output_dir)
             saved_any = false;
             try
                 imwrite(frame_data, tiff_filepath);
-                fprintf('保存 TIFF: %s\n', tiff_filepath);
                 saved_any = true;
             catch ME
                 fprintf('保存 TIFF 失败 %s: %s\n', tiff_filepath, ME.message);
             end
             try
                 imwrite(frame_data, png_filepath);
-                fprintf('保存 PNG: %s\n', png_filepath);
                 saved_any = true;
             catch ME
                 fprintf('保存 PNG 失败 %s: %s\n', png_filepath, ME.message);
