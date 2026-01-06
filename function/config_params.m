@@ -16,7 +16,7 @@ function params = config_params()
 params = struct();
 
 %% ========== TIFF生成控制参数 ==========
-params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
+params.tiff.make_tiff = 0;        % 1: 生成TIFF文件; 0: 不生成
 params.tiff.tiff_frame = 35;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
@@ -29,7 +29,7 @@ params.processing.useref = 1;                  % 参考信号模式 (1:使用前
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
 params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
-params.processing.enable_flatten_enface = 1;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
+params.processing.enable_flatten_enface = 0;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
 params.processing.enable_enface_noflat = 0;    % 1: 生成非展平En-face切片（直接从原始数据切片）, 0: 禁用
 params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
@@ -38,7 +38,7 @@ params.parallel.batchSize = 500;
 %% ========== 并行处理设置 ==========
 params.parallel.LocalUseMpiexec = false;       % 并行处理MPI设置
 % 可选：限制并行池最大 worker 数 (0 表示由代码自动选择)
-params.parallel.maxWorkers = 45;
+params.parallel.maxWorkers = 47;
 % 并行相关资源限制: 最大可用内存 (GB) 用于一次性预加载阈值
 params.parallel.maxMemGB = 100;
 % 是否在函数结束时自动关闭并行池 (false = 保持池存活以节省启动时间)
@@ -46,7 +46,7 @@ params.parallel.autoClosePool = false;
 
 %% ========== 处理模式配置 ==========
 % 处理模式配置（当前仅保留滤波模式选项）
-params.mode.wovWinF = 1;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
+params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
@@ -125,7 +125,7 @@ params.surface.smooth_window = 9;              % 平滑滤波窗口大小(减小
 
 %% ========== 后巩膜边界处理参数 ==========
 % 后巩膜边界文件路径（MAT文件）
-params.files.sclera_boundary_path = 'C:\yongxin.wang\Data\Process_Data\Disk\sclera_boundary.mat';  % 留空则不处理；设置完整路径则启用
+% params.files.sclera_boundary_path = 'C:\yongxin.wang\Data\Process_Data\Disk\sclera_boundary.mat';  % 留空则不处理；设置完整路径则启用
 % MAT文件中的变量名（可选，留空则自动探测）
 params.files.sclera_boundary_var = '';   % 例如: 'boundary', 'layer', 'sclera_line' 等
 

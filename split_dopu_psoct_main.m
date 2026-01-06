@@ -21,7 +21,7 @@ end
 % 设置数据路径
 data_path   = 'C:\yongxin.wang/Data/Select_Data/Enface_Data/jian';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'D:\1-Liu Jian\yongxin.wang\Output/ddg_3layer_3_19';
+output_base = 'D:\1-Liu Jian\yongxin.wang\Output\jian\dopu_3layer_3_19';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -57,24 +57,55 @@ else
     end
 
     % 逐个处理文件
-    for i = 1:length(oct_files)
+    % 如果是批处理模式，开始整体计时以显示总进度/ETA
+    total_files = length(oct_files);
+    runTimer = tic;
+    % 初始化总进度（每文件细分为100个单位，便于显示文件内的进度细分）
+    print_progress(0, total_files*100, '总进度', 40, 'blocks', NaN);
+    for i = 1:total_files
         full_path = fullfile(data_path, oct_files(i).name);
         fprintf('\n==================================================\n');
-        fprintf('开始处理第 %d/%d 个文件: %s\n', i, length(oct_files), oct_files(i).name);
+        fprintf('开始处理第 %d/%d 个文件: %s\n', i, total_files, oct_files(i).name);
         fprintf('==================================================\n');
         
         try
-            % 记录开始时间
-            tic;
+            % 记录本文件开始时间
+            file_timer = tic;
             
             % 调用单文件处理函数（传入本次运行的根输出目录 run_output_base）
-            rPSOCT_process_single_file(full_path, run_output_base);
+            % 传递文件索引、总文件数与总运行计时器以便内部更新总进度条
+            rPSOCT_process_single_file(full_path, run_output_base, i, total_files, runTimer);
             
             % 计算并显示处理时间
-            proc_time = toc;
+            proc_time = toc(file_timer);
             fprintf('文件 %s 处理成功, 耗时: %.2f 秒 (%.2f 分钟)\n', oct_files(i).name, proc_time, proc_time/60);
+            
+            % 更新总进度（以每文件为 100 单位的细分单位），并显示 ETA
+            globalTotal = total_files * 100;
+            globalCurrent = i * 100; % 完成当前文件
+            elapsed = toc(runTimer);
+            if globalCurrent > 0
+                avg_unit = elapsed / max(1, globalCurrent);
+                eta = avg_unit * max(0, globalTotal - globalCurrent);
+            else
+                eta = NaN;
+            end
+            prefix_total = sprintf('总进度 %d/%d', i, total_files);
+            print_progress(globalCurrent, globalTotal, prefix_total, 40, 'blocks', eta);
         catch ME
             fprintf('处理文件 %s 时出错: %s\n', oct_files(i).name, ME.message);
+            % 将该文件计为已完成以推进总进度（避免停滞）
+            globalTotal = total_files * 100;
+            globalCurrent = i * 100;
+            elapsed = toc(runTimer);
+            if globalCurrent > 0
+                avg_unit = elapsed / max(1, globalCurrent);
+                eta = avg_unit * max(0, globalTotal - globalCurrent);
+            else
+                eta = NaN;
+            end
+            prefix_total = sprintf('总进度 %d/%d (含失败)', i, total_files);
+            print_progress(globalCurrent, globalTotal, prefix_total, 40, 'blocks', eta);
             % 继续处理下一个文件
         end
     end
@@ -108,6 +139,20 @@ function rPSOCT_process_single_file(varargin)
     % 创建输出目录
     if ~exist(output_base, 'dir')
         mkdir(output_base) 
+    end
+
+    % 可选的整体进度追踪参数（fileIdx, totalFiles, runTimer）
+    fileIdx = [];
+    totalFiles = [];
+    runTimer = [];
+    if nargin >= 3
+        fileIdx = varargin{3};
+    end
+    if nargin >= 4
+        totalFiles = varargin{4};
+    end
+    if nargin >= 5
+        runTimer = varargin{5};
     end
 
     % 记录函数开始时间
@@ -792,6 +837,23 @@ function rPSOCT_process_single_file(varargin)
             print_progress(current_batch, total_batches, '', 30);
             fprintf('\n');
             
+            % 同步更新全局（全部文件）进度（如果提供了 fileIdx/totalFiles/runTimer）
+            if ~isempty(fileIdx) && ~isempty(totalFiles) && ~isempty(runTimer) && totalFiles > 1
+                globalTotal = totalFiles * 100;
+                % 在文件内按批次细分到 0-100 区间
+                globalCurrent = (fileIdx - 1) * 100 + round(current_batch / total_batches * 100);
+                elapsed_all = toc(runTimer);
+                if globalCurrent > 0
+                    avg_unit = elapsed_all / max(1, globalCurrent);
+                    eta_all = avg_unit * max(0, globalTotal - globalCurrent);
+                else
+                    eta_all = NaN;
+                end
+                prefix_total = sprintf('总进度 %d/%d %s', fileIdx, totalFiles, name);
+                fprintf('\n'); % 确保在新行显示总进度，不覆盖当前行输出
+                print_progress(globalCurrent, globalTotal, prefix_total, 40, 'blocks', eta_all);
+            end
+            
             % ========== 步骤4: 清空批次数据（释放内存）==========
             clear batch_Bs1 batch_Bs2 batch_dopu batch_Strus batch_Smap_avg batch_Smap_rep1;
             clear batch_topLines batch_LA_c_cfg1_avg batch_PhR_c_cfg1_avg batch_cumLA_cfg1_avg;
@@ -799,6 +861,20 @@ function rPSOCT_process_single_file(varargin)
             
         end % 分批循环结束
         
+        % 完成当前文件的所有批次后，确保更新全局进度为该文件完成
+        if ~isempty(fileIdx) && ~isempty(totalFiles) && ~isempty(runTimer) && totalFiles > 1
+            globalTotal = totalFiles * 100;
+            globalCurrent = fileIdx * 100;
+            elapsed_all = toc(runTimer);
+            if globalCurrent > 0
+                avg_unit = elapsed_all / max(1, globalCurrent);
+                eta_all = avg_unit * max(0, globalTotal - globalCurrent);
+            else
+                eta_all = NaN;
+            end
+            prefix_total = sprintf('总进度 %d/%d %s', fileIdx, totalFiles, name);
+            print_progress(globalCurrent, globalTotal, prefix_total, 40, 'blocks', eta_all);
+        end
         fprintf('\n========== 所有批次处理完成！==========\n');
         fprintf('总耗时: %.2f 秒 (%.2f 分钟)\n', toc(total_batch_start_time), toc(total_batch_start_time)/60);
         fprintf('======================================\n\n');
@@ -1342,7 +1418,6 @@ function rPSOCT_process_single_file(varargin)
         clear enface_phr_sclera_stack PhR_sclera_flat;
         
         fprintf('========== 后巩膜边界 En-face 生成完成 ==========\n');
-    end
     else
         fprintf('\n跳过展平及 En-face 生成功能 (enable_flatten_enface = 0)\n');
     end % end of enable_flatten_enface check
@@ -1469,4 +1544,5 @@ function rPSOCT_process_single_file(varargin)
         fprintf('保留并行池（poolStartedHere=%d, autoClosePool=%d）\n', double(exist('poolStartedHere','var') && poolStartedHere), double(isfield(params,'parallel') && isfield(params.parallel,'autoClosePool') && params.parallel.autoClosePool));
     end
     end
+end
 return;
