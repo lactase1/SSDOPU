@@ -1,5 +1,5 @@
-function print_progress(current, total, prefix, bar_length, style)
-% print_progress - 在MATLAB命令窗口显示纯文本进度条
+function print_progress(current, total, prefix, bar_length, style, eta_seconds)
+% print_progress - 在MATLAB命令窗口显示纯文本进度条并可显示 ETA
 % 
 % 输入参数:
 %   current    - 当前进度值 (1 到 total)
@@ -7,14 +7,11 @@ function print_progress(current, total, prefix, bar_length, style)
 %   prefix     - 进度条前缀文字 (可选，默认为 'Progress')
 %   bar_length - 进度条长度 (可选，默认为 30)
 %   style      - 进度条样式 (可选，默认为 'gradient')
-%                'gradient' - 渐变符号样式 (#→*→=)
-%                'blocks'   - 方块样式 (█)
-%                'arrows'   - 箭头样式 (>)
-%                'simple'   - 简单样式 (=)
+%   eta_seconds- 估计剩余秒数 (可选，传 NaN 表示不显示 ETA)
 %
 % 示例:
 %   for i = 1:100
-%       print_progress(i, 100, '处理中', 30, 'gradient');
+%       print_progress(i, 100, '处理中', 30, 'gradient', 120);
 %       pause(0.05);
 %   end
 
@@ -28,6 +25,15 @@ function print_progress(current, total, prefix, bar_length, style)
     if nargin < 5 || isempty(style)
         style = 'gradient';
     end
+    if nargin < 6
+        eta_seconds = NaN;
+    end
+    
+    % 防止除以0或非法值
+    if total <= 0
+        total = 1;
+    end
+    current = min(max(current, 0), total);
     
     % 计算进度百分比
     percent = current / total;
@@ -47,10 +53,16 @@ function print_progress(current, total, prefix, bar_length, style)
             bar = build_gradient_bar_text(filled_length, bar_length, percent);
     end
     
+    % 构建 ETA 字符串（当提供时且尚未完成）
+    eta_str = '';
+    if ~isnan(eta_seconds) && eta_seconds > 0 && current < total
+        eta_str = [' ETA: ' format_time(eta_seconds)];
+    end
+    
     % 打印进度条（使用 \r 回到行首实现原地更新）
     if current < total
-        fprintf('\r%s [%s] %5.1f%% (%d/%d)', ...
-                prefix, bar, percent*100, current, total);
+        fprintf('\r%s [%s] %5.1f%% (%d/%d)%s', ...
+                prefix, bar, percent*100, current, total, eta_str);
     else
         % 完成时换行并显示特殊完成标记
         fprintf('\r%s [%s] 100.0%% (%d/%d) ✓\n', ...
