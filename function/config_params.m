@@ -20,6 +20,10 @@ params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
 params.tiff.tiff_frame = 35;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
+%% ========== 低质量DCM生成设置 ==========
+params.tiff.save_low_quality_dcm = 1;  % 是否同时生成低质量DCM文件用于快速浏览 (1:生成, 0:不生成)
+params.tiff.low_quality_scale = 0.5;   % 低质量DCM缩放因子 (0.5表示缩小到50%，体积约为原始的25%)
+
 %% ========== 基础处理参数 ==========
 params.processing.disp_coef = -20.1;           % 色散补偿系数
 params.processing.do_PhComp = 1;               % 是否进行相位/色散补偿 (1:启用, 0:禁用)

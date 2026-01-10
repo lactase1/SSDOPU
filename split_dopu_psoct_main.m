@@ -955,6 +955,16 @@ function rPSOCT_process_single_file(varargin)
         dcm_dir = fullfile(foutputdir, 'dcm');
         if ~exist(dcm_dir, 'dir'), mkdir(dcm_dir); end
         
+        % 创建低质量 dcm 子文件夹（用于快速浏览）- 根据配置决定是否启用
+        if params.tiff.save_low_quality_dcm
+            dcm_low_quality_dir = fullfile(foutputdir, 'dcm_low_quality');
+            if ~exist(dcm_low_quality_dir, 'dir'), mkdir(dcm_low_quality_dir); end
+            low_quality_scale = params.tiff.low_quality_scale;
+        else
+            dcm_low_quality_dir = '';  % 空字符串表示不生成低质量版本
+            low_quality_scale = 0;
+        end
+        
         % 修复索引越界问题
         slice_index = min(100, floor(size(Strus,3)/2));  % 如果不足100层，则取中间层
         if slice_index < 1
@@ -968,7 +978,7 @@ function rPSOCT_process_single_file(varargin)
             Struc(1:nZ_save, :, :, i) = (SS1 - strLrg) ./ (strUrg - strLrg);
         end
         % 保存原始结构图像到 dcm 文件夹
-        dicomwrite(uint8(255 * (Struc)), fullfile(dcm_dir, [name, '_1-1_Struc.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * (Struc)), fullfile(dcm_dir, [name, '_1-1_Struc.dcm']), dcm_low_quality_dir, low_quality_scale);
 
         % 创建带边界的结构图像副本（只保留前300层）
         Struc_with_boundary = Struc(1:nZ_save, :, :, :);
@@ -988,16 +998,16 @@ function rPSOCT_process_single_file(varargin)
                 end
             end
         end
-        dicomwrite(uint8(255 * (Struc(1:nZ_save, :, :, :))), fullfile(dcm_dir, [name, '_1-1_Struc.dcm']));
-        dicomwrite(uint8(255 * (Struc_with_boundary)), fullfile(dcm_dir, [name, '_1-2_Struc_with_boundary.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * (Struc(1:nZ_save, :, :, :))), fullfile(dcm_dir, [name, '_1-1_Struc.dcm']), dcm_low_quality_dir, low_quality_scale);
+        dicomwrite_with_lowquality(uint8(255 * (Struc_with_boundary)), fullfile(dcm_dir, [name, '_1-2_Struc_with_boundary.dcm']), dcm_low_quality_dir, low_quality_scale);
         % dicomwrite(uint8(255 * (Smap_rep1 / 2 + 0.5)), fullfile(dcm_dir, [name, '_1-3_1rep-Stokes.dcm']));
-        dicomwrite(uint8(255 * (Smap_avg(1:nZ_save, :, :, :) / 2 + 0.5)), fullfile(dcm_dir, [name, '_1-3_4rep-Stokes.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * (Smap_avg(1:nZ_save, :, :, :) / 2 + 0.5)), fullfile(dcm_dir, [name, '_1-3_4rep-Stokes.dcm']), dcm_low_quality_dir, low_quality_scale);
 
         % 对1-4 DOPU图像应用阈值过滤（只保留前300层）
         dopu_thresholded = dopu_splitSpectrum(1:nZ_save, :, :);
         dopu_thresholded(dopu_thresholded <= 0.38) = 0;  % 小于等于0.5的设为0
 
-        dicomwrite(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), fullfile(dcm_dir, [name, '_1-4_dopu_SS.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), fullfile(dcm_dir, [name, '_1-4_dopu_SS.dcm']), dcm_low_quality_dir, low_quality_scale);
         
         if ~params.processing.hasSeg
             save(fullfile(filepath, [name, '.mat']), 'topLines', 'czrg');
@@ -1060,11 +1070,11 @@ function rPSOCT_process_single_file(varargin)
         end
         
         % 写入 DCM 文件到 dcm 文件夹
-        dicomwrite(uint8(255 * (cumLA_cfg1_avg / 2 + 0.5)), fullfile(dcm_dir, [name, '_2-1_cumLA-cfg1-', num2str(nr), 'repAvg.dcm']));
-        dicomwrite(uint8(255 * cumLA_cfg_hsv), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * (cumLA_cfg1_avg / 2 + 0.5)), fullfile(dcm_dir, [name, '_2-1_cumLA-cfg1-', num2str(nr), 'repAvg.dcm']), dcm_low_quality_dir, low_quality_scale);
+        dicomwrite_with_lowquality(uint8(255 * cumLA_cfg_hsv), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']), dcm_low_quality_dir, low_quality_scale);
         % dicomwrite(uint8(255 * (LA_c_cfg1_avg / 2 + 0.5)), fullfile(dcm_dir, [name, '_2-3_drLA-cfg1-', num2str(nr), 'repAvg.dcm']));
         % dicomwrite(uint8(255 * LA_cfg_hsv), fullfile(dcm_dir, [name, '_2-4_drLA-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
-        dicomwrite(PRRc, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg.dcm']));
+        dicomwrite_with_lowquality(PRRc, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg.dcm']), dcm_low_quality_dir, low_quality_scale);
         % dicomwrite(uint8(255 * (cumLA_Ms_cfg1_rmBG / 2 + 0.5)), fullfile(dcm_dir, [name, '_2-6_cumLA_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']));
         % dicomwrite(uint8(255 * cumLA_Ms_cfg1_rmBG_hsv), fullfile(dcm_dir, [name, '_2-7_cumLA_rmBG-cfg1-', num2str(nr), 'repAvg_hsvColoring.dcm']));
         % dicomwrite(uint8(255 * (LA_Ms_cfg1_rmBG / 2 + 0.5)), fullfile(dcm_dir, [name, '_2-8_drLA_rmBG-cfg1-', num2str(nr), 'repAvg.dcm']));
@@ -1277,13 +1287,13 @@ function rPSOCT_process_single_file(varargin)
         
         % 保存展平后的 Struc（新文件，加上 flat 标识）
         Struc_flat_4d = permute(Struc_flat, [1, 2, 4, 3]);  % [Z, X, 1, Y] for DCM
-        dicomwrite(uint8(255 * Struc_flat_4d), fullfile(dcm_dir, [name, '_1-1_Struc_flat.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * Struc_flat_4d), fullfile(dcm_dir, [name, '_1-1_Struc_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         
         % 保存展平后的 cumLA（新文件，加上 flat 标识）
-        dicomwrite(uint8(255 * cumLA_flat), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring_flat.dcm']));
+        dicomwrite_with_lowquality(uint8(255 * cumLA_flat), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         
         % 保存展平后的 PhR（新文件，加上 flat 标识）
-        dicomwrite(PhR_flat, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg_flat.dcm']));
+        dicomwrite_with_lowquality(PhR_flat, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         
         % 如果有后巩膜边界展平数据，也保存这些文件
         if has_sclera_boundary
@@ -1291,13 +1301,13 @@ function rPSOCT_process_single_file(varargin)
             
             % 保存后巩膜展平的 Struc
             Struc_sclera_flat_4d = permute(Struc_sclera_flat, [1, 2, 4, 3]);
-            dicomwrite(uint8(255 * Struc_sclera_flat_4d), fullfile(dcm_dir, [name, '_1-1_Struc_sclera_flat.dcm']));
+            dicomwrite_with_lowquality(uint8(255 * Struc_sclera_flat_4d), fullfile(dcm_dir, [name, '_1-1_Struc_sclera_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
             
             % 保存后巩膜展平的 cumLA
-            dicomwrite(uint8(255 * cumLA_sclera_flat), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring_sclera_flat.dcm']));
+            dicomwrite_with_lowquality(uint8(255 * cumLA_sclera_flat), fullfile(dcm_dir, [name, '_2-2_cumLA-cfg1-', num2str(nr), 'repAvg_hsvColoring_sclera_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
             
             % 保存后巩膜展平的 PhR
-            dicomwrite(PhR_sclera_flat, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg_sclera_flat.dcm']));
+            dicomwrite_with_lowquality(PhR_sclera_flat, fullfile(dcm_dir, [name, '_2-5_PhR-cfg1-', num2str(nr), 'repAvg_sclera_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
             
             fprintf('后巩膜边界展平的 DCM 保存完成\n');
         end
@@ -1356,7 +1366,7 @@ function rPSOCT_process_single_file(varargin)
             end
             
             % 保存 En-face DCM
-            dicomwrite(enface_struc_stack, fullfile(dcm_dir, [name, '_3-3_Enface_flat.dcm']));
+            dicomwrite_with_lowquality(enface_struc_stack, fullfile(dcm_dir, [name, '_3-3_Enface_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
             fprintf('\n  Struc En-face 耗时: %.2f 秒\n', toc(t_enface));
             
             % 释放临时变量（保留Struc等原始数据供后续使用）
@@ -1405,7 +1415,7 @@ function rPSOCT_process_single_file(varargin)
         end
         
         % 保存 En-face DCM
-        dicomwrite(enface_cumla_stack, fullfile(dcm_dir, [name, '_3-5_Enface_cumLA_flat.dcm']));
+        dicomwrite_with_lowquality(enface_cumla_stack, fullfile(dcm_dir, [name, '_3-5_Enface_cumLA_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  cumLA En-face 耗时: %.2f 秒\n', toc(t_cumla));
         
         % 释放大数组
@@ -1435,7 +1445,7 @@ function rPSOCT_process_single_file(varargin)
         end
         
         % 保存 En-face DCM
-        dicomwrite(enface_phr_stack, fullfile(dcm_dir, [name, '_3-6_Enface_PhR_flat.dcm']));
+        dicomwrite_with_lowquality(enface_phr_stack, fullfile(dcm_dir, [name, '_3-6_Enface_PhR_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  PhR En-face 耗时: %.2f 秒\n', toc(t_phr));
         
         % 释放大数组
@@ -1463,7 +1473,7 @@ function rPSOCT_process_single_file(varargin)
             enface_struc_sclera_stack(:, :, 1, z) = uint8(255 * en_face_slice);
         end
         
-        dicomwrite(enface_struc_sclera_stack, fullfile(dcm_dir, [name, '_4-1_Enface_Struc_sclera_flat.dcm']));
+        dicomwrite_with_lowquality(enface_struc_sclera_stack, fullfile(dcm_dir, [name, '_4-1_Enface_Struc_sclera_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  Struc (后巩膜) En-face 耗时: %.2f 秒\n', toc(t_struc_sclera));
         clear enface_struc_sclera_stack Struc_sclera_flat;
         
@@ -1484,7 +1494,7 @@ function rPSOCT_process_single_file(varargin)
             enface_cumla_sclera_stack(:, :, :, z) = uint8(255 * slice_rgb);
         end
         
-        dicomwrite(enface_cumla_sclera_stack, fullfile(dcm_dir, [name, '_4-2_Enface_cumLA_sclera_flat.dcm']));
+        dicomwrite_with_lowquality(enface_cumla_sclera_stack, fullfile(dcm_dir, [name, '_4-2_Enface_cumLA_sclera_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  cumLA (后巩膜) En-face 耗时: %.2f 秒\n', toc(t_cumla_sclera));
         clear enface_cumla_sclera_stack cumLA_sclera_flat;
         
@@ -1505,7 +1515,7 @@ function rPSOCT_process_single_file(varargin)
             enface_phr_sclera_stack(:, :, :, z) = slice_rgb;
         end
         
-        dicomwrite(enface_phr_sclera_stack, fullfile(dcm_dir, [name, '_4-3_Enface_PhR_sclera_flat.dcm']));
+        dicomwrite_with_lowquality(enface_phr_sclera_stack, fullfile(dcm_dir, [name, '_4-3_Enface_PhR_sclera_flat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  PhR (后巩膜) En-face 耗时: %.2f 秒\n', toc(t_phr_sclera));
         clear enface_phr_sclera_stack PhR_sclera_flat;
         
@@ -1537,7 +1547,7 @@ function rPSOCT_process_single_file(varargin)
             enface_struc_noflat_stack(:, :, 1, z) = uint8(255 * en_face_slice);
         end
         
-        dicomwrite(enface_struc_noflat_stack, fullfile(dcm_dir, [name, '_3-3_Enface_noflat.dcm']));
+        dicomwrite_with_lowquality(enface_struc_noflat_stack, fullfile(dcm_dir, [name, '_3-3_Enface_noflat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  Struc En-face (非展平) 耗时: %.2f 秒\n', toc(t_enface_noflat));
         clear enface_struc_noflat_stack;
         
@@ -1560,7 +1570,7 @@ function rPSOCT_process_single_file(varargin)
             enface_cumla_noflat_stack(:, :, :, z) = uint8(255 * slice_rgb);
         end
         
-        dicomwrite(enface_cumla_noflat_stack, fullfile(dcm_dir, [name, '_3-5_Enface_cumLA_noflat.dcm']));
+        dicomwrite_with_lowquality(enface_cumla_noflat_stack, fullfile(dcm_dir, [name, '_3-5_Enface_cumLA_noflat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  cumLA En-face (非展平) 耗时: %.2f 秒\n', toc(t_cumla_noflat));
         clear enface_cumla_noflat_stack;
         
@@ -1583,7 +1593,7 @@ function rPSOCT_process_single_file(varargin)
             enface_phr_noflat_stack(:, :, :, z) = slice_rgb;
         end
         
-        dicomwrite(enface_phr_noflat_stack, fullfile(dcm_dir, [name, '_3-6_Enface_PhR_noflat.dcm']));
+        dicomwrite_with_lowquality(enface_phr_noflat_stack, fullfile(dcm_dir, [name, '_3-6_Enface_PhR_noflat.dcm']), dcm_low_quality_dir, low_quality_scale);
         fprintf('\n  PhR En-face (非展平) 耗时: %.2f 秒\n', toc(t_phr_noflat));
         clear enface_phr_noflat_stack Struc_noflat;
         
