@@ -10,8 +10,8 @@ if exist(function_path, 'dir')
 end
 
 %% 用户配置
-data_path = 'C:\yongxin.wang\Data\Select_Data\Enface_Data\Jian'; % 修改为你的数据路径
-output_base = 'D:\1-Liu Jian\yongxin.wang\Output\struct_pngs_Jian'; % 输出根目录
+data_path = 'C:\yongxin.wang\Data\Process_Data\Disc\Enface'; % 修改为你的数据路径
+output_base = 'C:\yongxin.wang\Data\Enface_struct'; % 输出根目录
 max_frames = -1; % <=0 表示全部帧
 czrg_limit = 320; % 深度范围上限
 verbose = true;
