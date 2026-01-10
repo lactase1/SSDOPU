@@ -35,7 +35,7 @@ params.processing.iy = 1;                      % Y方向步长(通常为1)
 params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
 params.processing.enable_flatten_enface = 1;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
 params.processing.enable_enface_noflat = 0;    % 1: 生成非展平En-face切片（直接从原始数据切片）, 0: 禁用
-params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.max_frames = 36;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 params.parallel.batchSize = 500;
 
