@@ -16,7 +16,7 @@ function params = config_params()
 params = struct();
 
 %% ========== TIFF生成控制参数 ==========
-params.tiff.make_tiff = 0;        % 1: 生成TIFF文件; 0: 不生成
+params.tiff.make_tiff = 1;        % 1: 生成TIFF文件; 0: 不生成
 params.tiff.tiff_frame = 35;     % 要提取的帧号(默认160，即中间帧)
 params.tiff.saveDicom = 1;        % 是否保存DICOM文件 (1:保存, 0:不保存)
 
@@ -29,9 +29,9 @@ params.processing.useref = 1;                  % 参考信号模式 (1:使用前
 params.processing.show_img = 0;                % 是否显示中间结果图像
 params.processing.iy = 1;                      % Y方向步长(通常为1)
 params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
-params.processing.enable_flatten_enface = 0;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
+params.processing.enable_flatten_enface = 1;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
 params.processing.enable_enface_noflat = 0;    % 1: 生成非展平En-face切片（直接从原始数据切片）, 0: 禁用
-params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.max_frames = 36;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 params.parallel.batchSize = 500;
 
@@ -70,7 +70,7 @@ params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂�
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置(MAX_AVNUM = 19)
-params.polarization.Avnum = 3;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum = 19;                 % DDG测试用平均层数(统一使用以保持一致性)
 params.polarization.enableDopuPhaseSupp = 0;  % 1: 使用DOPU自适应相位抑制; 0: 关闭该功能
 
 % 配置1滤波核范围 (用于局部双折射LA计算)

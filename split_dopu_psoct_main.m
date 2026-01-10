@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang/Data/Select_Data/Enface_Data/jian';
+data_path   = 'C:\yongxin.wang\Data\Process_Data\05_1310_redDisk';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'D:\1-Liu Jian\yongxin.wang\Output\jian\dopu_3layer_3_19';
+output_base = 'C:\yongxin.wang\Data\Process_Data\05_1310_redDisk\Output\dopu_19layer_3_19';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -1054,7 +1054,7 @@ function rPSOCT_process_single_file(varargin)
                 shift = target_surf_z - surf_z;
                 
                 for z = 1:nZ_cumLA_flatten
-                    z_src = z - shift - Avnum;  % cumLA 从表面下 Avnum 开始
+                    z_src = z - shift;  % 修复：与Struc对齐，从顶端开始
                     if z_src >= 1 && z_src <= nZ_cumLA
                         cumLA_flat(z, ix, :, iy) = cumLA_cfg_hsv(z_src, ix, :, iy);
                     end
@@ -1082,7 +1082,7 @@ function rPSOCT_process_single_file(varargin)
                 shift = target_surf_z - surf_z;
                 
                 for z = 1:nZ_PhR_flatten
-                    z_src = z - shift - Avnum;
+                    z_src = z - shift;  % 修复：与Struc对齐，从顶端开始
                     if z_src >= 1 && z_src <= nZ_PhR
                         PhR_flat(z, ix, :, iy) = PRRc(z_src, ix, :, iy);
                     end
@@ -1143,7 +1143,7 @@ function rPSOCT_process_single_file(varargin)
                     shift = target_sclera_z - sclera_z;
                     
                     for z = 1:nZ_cumLA_flatten
-                        z_src = z - shift - Avnum;
+                        z_src = z - shift;  % 修复：与Struc对齐，从顶端开始
                         if z_src >= 1 && z_src <= nZ_cumLA
                             cumLA_sclera_flat(z, ix, :, iy) = cumLA_cfg_hsv(z_src, ix, :, iy);
                         end
@@ -1169,7 +1169,7 @@ function rPSOCT_process_single_file(varargin)
                     shift = target_sclera_z - sclera_z;
                     
                     for z = 1:nZ_PhR_flatten
-                        z_src = z - shift - Avnum;
+                        z_src = z - shift;  % 修复：与Struc对齐，从顶端开始
                         if z_src >= 1 && z_src <= nZ_PhR
                             PhR_sclera_flat(z, ix, :, iy) = PRRc(z_src, ix, :, iy);
                         end
