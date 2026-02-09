@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang\Data\Process_Data\05_1310_redDisk';
+data_path   = 'C:\yongxin.wang\glaucoma';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang\Data\Process_Data\05_1310_redDisk\Output\dopu_19layer_3_19';
+output_base = 'C:\yongxin.wang\glaucoma\Output\ddg_3layer_3_13';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -579,79 +579,175 @@ function rPSOCT_process_single_file(varargin)
         Stru_OAC = Strus;
         dopu_splitSpectrum = zeros(numel(czrg), nX, nY);
         
-        % ========== 加载后巩膜边界数据（如果配置了路径）==========
+        % ========== 加载后巩膜边界数据（支持多文件自动匹配）==========
+        % 加载逻辑优先级：
+        %   1. 首先尝试从输入文件夹下的 scaler_mat 子文件夹中查找匹配的 mat 文件
+        %   2. 如果 scaler_mat 中找不到，则回退到配置文件中指定的路径
         sclera_boundary_data = [];  % 初始化为空
         has_sclera_boundary = false;
+        sclera_boundary_file = '';
         
-        if isfield(params, 'files') && isfield(params.files, 'sclera_boundary_path') && ~isempty(params.files.sclera_boundary_path)
-            sclera_boundary_file = params.files.sclera_boundary_path;
+        % 检查是否启用后巩膜边界处理
+        use_sclera = true;  % 默认启用
+        if isfield(params, 'files') && isfield(params.files, 'use_sclera_boundary')
+            use_sclera = params.files.use_sclera_boundary;
+        end
+        
+        if ~use_sclera
+            fprintf('\n后巩膜边界处理已禁用 (params.files.use_sclera_boundary = 0)\n');
+        else
+            % 获取 scaler_mat 文件夹名称（可配置）
+            scaler_folder_name = 'scaler_mat';  % 默认名称
+            if isfield(params, 'files') && isfield(params.files, 'sclera_mat_folder') && ~isempty(params.files.sclera_mat_folder)
+                scaler_folder_name = params.files.sclera_mat_folder;
+            end
             
-            if exist(sclera_boundary_file, 'file')
-                fprintf('\n========== 加载后巩膜边界数据 ==========\n');
-                fprintf('文件路径: %s\n', sclera_boundary_file);
+            % 方式1: 自动从 scaler_mat 文件夹中查找匹配的后巩膜边界文件
+            scaler_mat_folder = fullfile(filepath, scaler_folder_name);
+            if exist(scaler_mat_folder, 'dir')
+                fprintf('\n========== 搜索后巩膜边界数据 (%s) ==========\n', scaler_folder_name);
+                fprintf('搜索目录: %s\n', scaler_mat_folder);
                 
-                try
-                    % 确定变量名（默认与topLines相同的变量名，或使用配置的变量名）
-                    if isfield(params.files, 'sclera_boundary_var') && ~isempty(params.files.sclera_boundary_var)
-                        var_name = params.files.sclera_boundary_var;
-                    else
-                        % 默认尝试常见的变量名
-                        var_name = 'bottomLines';  % 默认名称
-                        % 检查文件中是否存在该变量，如果不存在则尝试其他名称
-                        mat_info = whos('-file', sclera_boundary_file);
-                        var_names = {mat_info.name};
-                        
-                        common_names = {'bottomLines', 'scleraLines', 'boundary', 'layer', 'sclera_line', 'topLines'};
-                        found = false;
-                        for k = 1:length(common_names)
-                            if ismember(common_names{k}, var_names)
-                                var_name = common_names{k};
-                                found = true;
+                % 获取当前处理文件的基础名（不含扩展名），用于匹配
+                [~, current_base_name, ~] = fileparts(name);
+                
+                % 搜索所有 .mat 文件
+                mat_files_in_scaler = dir(fullfile(scaler_mat_folder, '*.mat'));
+                
+                if ~isempty(mat_files_in_scaler)
+                    fprintf('找到 %d 个 MAT 文件\n', length(mat_files_in_scaler));
+                    
+                    % 尝试多种匹配策略
+                    matched_file = '';
+                    
+                    % 策略1: 精确匹配（文件名相同）
+                    for k = 1:length(mat_files_in_scaler)
+                        [~, mat_base_name, ~] = fileparts(mat_files_in_scaler(k).name);
+                        if strcmpi(mat_base_name, current_base_name)
+                            matched_file = fullfile(scaler_mat_folder, mat_files_in_scaler(k).name);
+                            fprintf('精确匹配成功: %s\n', mat_files_in_scaler(k).name);
+                            break;
+                        end
+                    end
+                    
+                    % 策略2: 模糊匹配（文件名包含当前处理文件的基础名）
+                    if isempty(matched_file)
+                        for k = 1:length(mat_files_in_scaler)
+                            [~, mat_base_name, ~] = fileparts(mat_files_in_scaler(k).name);
+                            if contains(mat_base_name, current_base_name, 'IgnoreCase', true) || ...
+                               contains(current_base_name, mat_base_name, 'IgnoreCase', true)
+                                matched_file = fullfile(scaler_mat_folder, mat_files_in_scaler(k).name);
+                                fprintf('模糊匹配成功: %s\n', mat_files_in_scaler(k).name);
                                 break;
                             end
                         end
-                        
-                        % 如果都没找到，使用第一个变量
-                        if ~found && ~isempty(var_names)
-                            var_name = var_names{1};
+                    end
+                    
+                    % 策略3: 如果只有一个文件，直接使用
+                    if isempty(matched_file) && length(mat_files_in_scaler) == 1
+                        matched_file = fullfile(scaler_mat_folder, mat_files_in_scaler(1).name);
+                        fprintf('仅有一个文件，自动使用: %s\n', mat_files_in_scaler(1).name);
+                    end
+                    
+                    % 策略4: 按文件索引匹配（如果有多个文件且有 fileIdx）
+                    if isempty(matched_file) && ~isempty(fileIdx) && fileIdx <= length(mat_files_in_scaler)
+                        matched_file = fullfile(scaler_mat_folder, mat_files_in_scaler(fileIdx).name);
+                        fprintf('按索引匹配 (第 %d 个文件): %s\n', fileIdx, mat_files_in_scaler(fileIdx).name);
+                    end
+                    
+                    if ~isempty(matched_file)
+                        sclera_boundary_file = matched_file;
+                    else
+                        fprintf('未能在 %s 中找到匹配的后巩膜边界文件\n', scaler_folder_name);
+                        % 列出可用文件供参考
+                        fprintf('可用文件列表:\n');
+                        for k = 1:min(5, length(mat_files_in_scaler))
+                            fprintf('  [%d] %s\n', k, mat_files_in_scaler(k).name);
+                        end
+                        if length(mat_files_in_scaler) > 5
+                            fprintf('  ... 等共 %d 个文件\n', length(mat_files_in_scaler));
+                        end
+                    end
+                else
+                    fprintf('%s 文件夹中没有找到 MAT 文件\n', scaler_folder_name);
+                end
+            end
+            
+            % 方式2: 如果 scaler_mat 中未找到，回退到配置文件中指定的路径
+            if isempty(sclera_boundary_file) && isfield(params, 'files') && isfield(params.files, 'sclera_boundary_path') && ~isempty(params.files.sclera_boundary_path)
+                fprintf('回退到配置文件中指定的后巩膜边界路径\n');
+                sclera_boundary_file = params.files.sclera_boundary_path;
+            end
+        end
+        
+        % 加载后巩膜边界数据
+        if use_sclera && ~isempty(sclera_boundary_file) && exist(sclera_boundary_file, 'file')
+            fprintf('\n========== 加载后巩膜边界数据 ==========\n');
+            fprintf('文件路径: %s\n', sclera_boundary_file);
+            
+            try
+                % 确定变量名（默认与topLines相同的变量名，或使用配置的变量名）
+                if isfield(params, 'files') && isfield(params.files, 'sclera_boundary_var') && ~isempty(params.files.sclera_boundary_var)
+                    var_name = params.files.sclera_boundary_var;
+                else
+                    % 默认尝试常见的变量名
+                    var_name = 'bottomLines';  % 默认名称
+                    % 检查文件中是否存在该变量，如果不存在则尝试其他名称
+                    mat_info = whos('-file', sclera_boundary_file);
+                    var_names = {mat_info.name};
+                    
+                    common_names = {'bottomLines', 'scleraLines', 'boundary', 'layer', 'sclera_line', 'topLines'};
+                    found = false;
+                    for k = 1:length(common_names)
+                        if ismember(common_names{k}, var_names)
+                            var_name = common_names{k};
+                            found = true;
+                            break;
                         end
                     end
                     
-                    % 加载边界数据（参考topLines的加载方式）
-                    loaded_data = load(sclera_boundary_file, var_name);
-                    
-                    % 直接获取加载的变量
-                    if isfield(loaded_data, var_name)
-                        sclera_boundary_data = loaded_data.(var_name);
-                        fprintf('成功从变量 "%s" 加载边界数据\n', var_name);
-                        
-                        % 转换为double（与topLines处理一致）
-                        sclera_boundary_data = double(sclera_boundary_data);
-                        
-                        % 注意: 无效边界值将在后续统一修复
-                        
-                        % 显示加载信息
-                        fprintf('边界数据维度: [%s]\n', num2str(size(sclera_boundary_data)));
-                        fprintf('边界范围: %.1f ~ %.1f\n', min(sclera_boundary_data(:)), max(sclera_boundary_data(:)));
-                        fprintf('后巩膜边界数据加载成功！\n');
-                        fprintf('======================================\n\n');
-                        
-                        has_sclera_boundary = true;
-                    else
-                        warning('变量 "%s" 加载失败', var_name);
-                        sclera_boundary_data = [];
-                        has_sclera_boundary = false;
+                    % 如果都没找到，使用第一个变量
+                    if ~found && ~isempty(var_names)
+                        var_name = var_names{1};
                     end
+                end
+                
+                % 加载边界数据（参考topLines的加载方式）
+                loaded_data = load(sclera_boundary_file, var_name);
+                
+                % 直接获取加载的变量
+                if isfield(loaded_data, var_name)
+                    sclera_boundary_data = loaded_data.(var_name);
+                    fprintf('成功从变量 "%s" 加载边界数据\n', var_name);
                     
-                catch ME
-                    warning('加载后巩膜边界数据失败: %s', ME.message);
-                    fprintf('错误详情: %s\n', ME.getReport());
+                    % 转换为double（与topLines处理一致）
+                    sclera_boundary_data = double(sclera_boundary_data);
+                    
+                    % 注意: 无效边界值将在后续统一修复
+                    
+                    % 显示加载信息
+                    fprintf('边界数据维度: [%s]\n', num2str(size(sclera_boundary_data)));
+                    fprintf('边界范围: %.1f ~ %.1f\n', min(sclera_boundary_data(:)), max(sclera_boundary_data(:)));
+                    fprintf('后巩膜边界数据加载成功！\n');
+                    fprintf('======================================\n\n');
+                    
+                    has_sclera_boundary = true;
+                else
+                    warning('变量 "%s" 加载失败', var_name);
                     sclera_boundary_data = [];
                     has_sclera_boundary = false;
                 end
-            else
-                warning('后巩膜边界文件不存在: %s', sclera_boundary_file);
+                
+            catch ME
+                warning('加载后巩膜边界数据失败: %s', ME.message);
+                fprintf('错误详情: %s\n', ME.getReport());
+                sclera_boundary_data = [];
+                has_sclera_boundary = false;
             end
+        elseif ~isempty(sclera_boundary_file)
+            warning('后巩膜边界文件不存在: %s', sclera_boundary_file);
+        else
+            fprintf('未配置后巩膜边界数据路径，跳过加载\n');
         end
         
         % ========== [Fix 2.0] 强力修复后巩膜边界逻辑（如果已加载）==========

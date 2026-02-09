@@ -1,28 +1,34 @@
 #!/usr/bin/env python3
 """
-dcm_to_gif.py
+dcm_to_mp4.py
 
-Convert DICOM (.dcm) multi-frame files to animated GIF(s).
+Convert DICOM (.dcm) multi-frame files to MP4 video(s).
 
 Usage:
-    python dcm_to_gif.py <input_path> [--output <out_path_or_dir>] [--duration MS] [--loop N] [--verbose]
+    python dcm_to_mp4.py <input_path> [--output <out_path_or_dir>] [--fps FPS] [--verbose]
 
-If <input_path> is a file, produces one GIF. If it's a directory, processes all .dcm files inside and
-writes per-file GIFs to the output directory (or same folder if not given).
+If <input_path> is a file, produces one MP4. If it's a directory, processes all .dcm files inside and
+writes per-file MP4s to the output directory (or same folder if not given).
 
-Dependencies: pydicom, Pillow, numpy
+Dependencies: pydicom, opencv-python, numpy
 
 Examples:
-    python dcm_to_gif.py data/example.dcm --output out.gif --duration 100
-    python dcm_to_gif.py data/dcm_folder --output out_dir --duration 80 --loop 0
+    python dcm_to_mp4.py data/example.dcm --output out.mp4 --fps 10
+    python dcm_to_mp4.py data/dcm_folder --output out_dir --fps 15
 """
 
 import os
 import argparse
-import math
 import numpy as np
-from PIL import Image
+import cv2
 import pydicom
+
+# Try to import imageio for better MP4 support
+try:
+    import imageio
+    HAS_IMAGEIO = True
+except ImportError:
+    HAS_IMAGEIO = False
 
 
 def get_frames_from_dataset(ds, verbose=False):
@@ -135,7 +141,7 @@ def get_frames_from_dataset(ds, verbose=False):
 
 
 def normalize_frame_to_uint8(frame):
-    """Normalize numpy frame to uint8 2D or 3D array suitable for Image.fromarray"""
+    """Normalize numpy frame to uint8 2D or 3D array suitable for video writing"""
     if frame.dtype == np.uint8:
         return frame
     if frame.dtype == np.bool_:
@@ -154,54 +160,134 @@ def normalize_frame_to_uint8(frame):
     return scaled
 
 
-def frames_to_gif(frames, out_path, duration=100, loop=0, verbose=False):
+def frames_to_mp4(frames, out_path, fps=10, verbose=False, skip_existing=False):
+    """Save frames as MP4 video using imageio (preferred) or OpenCV fallback"""
     if len(frames) == 0:
         raise ValueError('No frames to save')
-    pil_frames = []
-    for i, f in enumerate(frames):
+    
+    # Prepare first frame to get dimensions
+    first_frame = normalize_frame_to_uint8(frames[0])
+    if first_frame.ndim == 2:
+        height, width = first_frame.shape
+    else:
+        height, width = first_frame.shape[:2]
+    
+    # Ensure output path has .mp4 extension
+    out_path = os.path.splitext(out_path)[0] + '.mp4'
+    
+    # Prepare all frames as RGB uint8
+    rgb_frames = []
+    for f in frames:
         f_u8 = normalize_frame_to_uint8(f)
-        # If grayscale 2D -> convert to RGB for better GIF results
         if f_u8.ndim == 2:
-            img = Image.fromarray(f_u8).convert('RGBA')
+            rgb_frame = cv2.cvtColor(f_u8, cv2.COLOR_GRAY2RGB)
         elif f_u8.ndim == 3 and f_u8.shape[2] == 3:
-            img = Image.fromarray(f_u8).convert('RGBA')
+            rgb_frame = f_u8  # Already RGB
         elif f_u8.ndim == 3 and f_u8.shape[2] == 4:
-            img = Image.fromarray(f_u8).convert('RGBA')
+            rgb_frame = cv2.cvtColor(f_u8, cv2.COLOR_RGBA2RGB)
         else:
-            # unexpected channels: reduce to first channel
-            img = Image.fromarray(f_u8[..., 0]).convert('RGBA')
-        # Convert to P (palette) to produce smaller GIFs
-        pal = img.convert('P', palette=Image.ADAPTIVE)
-        pil_frames.append(pal)
+            rgb_frame = cv2.cvtColor(f_u8[..., 0], cv2.COLOR_GRAY2RGB)
+        rgb_frames.append(rgb_frame)
+    
+    # Try imageio first (more reliable for MP4)
+    if HAS_IMAGEIO:
+        try:
+            if verbose:
+                print(f'Using imageio to write MP4: {out_path}')
+            
+            # Check if file exists and try to remove it
+            if os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except PermissionError:
+                    if skip_existing:
+                        if verbose:
+                            print(f'Skipping {out_path} - file exists and may be in use')
+                        return None
+                    raise PermissionError(f'Cannot overwrite {out_path} - file may be in use')
+            
+            # Check write permission by testing parent directory
+            out_dir = os.path.dirname(out_path) or '.'
+            if not os.access(out_dir, os.W_OK):
+                raise PermissionError(f'No write permission for directory: {out_dir}')
+            
+            # Use imageio with ffmpeg backend
+            writer = imageio.get_writer(out_path, fps=fps, codec='libx264', 
+                                        pixelformat='yuv420p', macro_block_size=1)
+            for frame in rgb_frames:
+                writer.append_data(frame)
+            writer.close()
+            if verbose:
+                print(f'Video saved: {out_path} ({len(frames)} frames, fps={fps})')
+            return out_path
+        except PermissionError as e:
+            raise e  # Re-raise permission errors
+        except Exception as e:
+            if verbose:
+                print(f'imageio failed: {e}, trying OpenCV fallback...')
+    
+    # OpenCV fallback with multiple codecs
+    codecs = [
+        ('avc1', '.mp4'),
+        ('mp4v', '.mp4'),
+        ('X264', '.mp4'),
+        ('H264', '.mp4'),
+    ]
+    
+    writer = None
+    final_out_path = out_path
+    for codec, ext in codecs:
+        final_out_path = os.path.splitext(out_path)[0] + ext
+        
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        writer = cv2.VideoWriter(final_out_path, fourcc, fps, (width, height))
+        
+        if writer.isOpened():
+            if verbose:
+                print(f'Using OpenCV codec: {codec}, output: {final_out_path}')
+            break
+        else:
+            writer.release()
+            writer = None
+            if verbose:
+                print(f'Codec {codec} failed, trying next...')
+    
+    if writer is None or not writer.isOpened():
+        raise ValueError(f'Failed to open video writer for {out_path}. No suitable codec found. '
+                        f'Try: pip install imageio imageio-ffmpeg')
+    
+    for i, f in enumerate(rgb_frames):
+        # Convert RGB to BGR for OpenCV
+        bgr_frame = cv2.cvtColor(f, cv2.COLOR_RGB2BGR)
+        writer.write(bgr_frame)
         if verbose:
-            print(f'Prepared frame {i+1}/{len(frames)} size={img.size}')
-
-    first = pil_frames[0]
-    others = pil_frames[1:]
-    # Save GIF
-    first.save(out_path, format='GIF', save_all=True, append_images=others, duration=duration, loop=loop)
+            print(f'Written frame {i+1}/{len(frames)} size=({width}, {height})')
+    
+    writer.release()
     if verbose:
-        print(f'GIF saved: {out_path} ({len(frames)} frames, duration={duration}ms, loop={loop})')
+        print(f'Video saved: {final_out_path} ({len(frames)} frames, fps={fps})')
+    
+    return final_out_path
 
 
-def process_file(dcm_path, out_path=None, duration=100, loop=0, verbose=False):
+def process_file(dcm_path, out_path=None, fps=10, verbose=False, skip_existing=False):
     ds = pydicom.dcmread(dcm_path)
     frames = get_frames_from_dataset(ds, verbose=verbose)
     if out_path is None:
-        out_path = os.path.splitext(dcm_path)[0] + '.gif'
+        out_path = os.path.splitext(dcm_path)[0] + '.mp4'
     elif os.path.isdir(out_path):
-        out_path = os.path.join(out_path, os.path.splitext(os.path.basename(dcm_path))[0] + '.gif')
+        out_path = os.path.join(out_path, os.path.splitext(os.path.basename(dcm_path))[0] + '.mp4')
 
-    frames_to_gif(frames, out_path, duration=duration, loop=loop, verbose=verbose)
-    return out_path
+    final_out_path = frames_to_mp4(frames, out_path, fps=fps, verbose=verbose, skip_existing=skip_existing)
+    return final_out_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Convert DICOM (multi-frame) to animated GIF')
+    parser = argparse.ArgumentParser(description='Convert DICOM (multi-frame) to MP4 video')
     parser.add_argument('input', help='DICOM file or directory containing .dcm files')
-    parser.add_argument('--output', '-o', help='Output GIF file path or directory (defaults to input folder)', default=None)
-    parser.add_argument('--duration', '-d', type=int, default=100, help='Frame duration in milliseconds')
-    parser.add_argument('--loop', '-l', type=int, default=0, help='Number of GIF loops (0=infinite)')
+    parser.add_argument('--output', '-o', help='Output MP4 file path or directory (defaults to input folder)', default=None)
+    parser.add_argument('--fps', '-f', type=int, default=10, help='Frames per second (default: 10)')
+    parser.add_argument('--skip-existing', '-s', action='store_true', help='Skip files that already exist and cannot be overwritten')
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
 
@@ -214,8 +300,11 @@ def main():
             return
         for f in dcm_files:
             try:
-                out = process_file(f, out_dir, duration=args.duration, loop=args.loop, verbose=args.verbose)
-                print('Saved GIF:', out)
+                out = process_file(f, out_dir, fps=args.fps, verbose=args.verbose, skip_existing=args.skip_existing)
+                if out is not None:
+                    print('Saved MP4:', out)
+                else:
+                    print('Skipped (already exists):', f)
             except Exception as e:
                 print('Failed:', f, e)
     else:
@@ -224,8 +313,11 @@ def main():
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         try:
-            outp = process_file(args.input, out, duration=args.duration, loop=args.loop, verbose=args.verbose)
-            print('Saved GIF:', outp)
+            outp = process_file(args.input, out, fps=args.fps, verbose=args.verbose, skip_existing=args.skip_existing)
+            if outp is not None:
+                print('Saved MP4:', outp)
+            else:
+                print('Skipped (already exists):', args.input)
         except Exception as e:
             print('Failed:', args.input, e)
 

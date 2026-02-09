@@ -3,9 +3,9 @@
 % 直接在脚本中指定路径和目标帧，运行时无需传参
 
 % --- 配置（按需修改） ---
-dcm_folder = 'C:\yongxin.wang\Data\Process_Data\Disk\Output-dopu-adj\dopu_3layer_3_19\dcm';
-target_frame = 25; % 1-based
-output_dir = 'C:\yongxin.wang\Data\Process_Data\Disk\Output-dopu-adj\dopu_3layer_3_19\slect_frame';
+dcm_folder = 'C:\yongxin.wang\glaucoma\Output\dopu_19layer_3_19\2024.07.31_17.26.42_1.m\dcm';
+target_frame = 19; % 1-based
+output_dir = 'C:\yongxin.wang\glaucoma\Output\dopu_19layer_3_19\2024.07.31_17.26.42_1.m\slect_frame';
 % -------------------------
 
 if ~exist(dcm_folder, 'dir')
@@ -25,11 +25,12 @@ selected = {};
 for k = 1:numel(files)
     nm = files(k).name;
     nm_low = lower(nm);
+    is1_1 = contains(nm, '1-1') && ~contains(nm_low, 'flat');
     is2_2 = contains(nm, '2-2') && ~contains(nm_low, 'flat');
     is2_5 = contains(nm, '2-5') && ~contains(nm_low, 'flat');
     is3 = contains(nm, '_3-') || contains(nm, '-3-') || contains(nm, '-3_');
     is4 = contains(nm, '_4-') || contains(nm, '-4-') || contains(nm, '-4_');
-    if is2_2 || is2_5 || is3 || is4
+    if is1_1 || is2_2 || is2_5 || is3 || is4
         selected{end+1} = fullfile(dcm_folder, nm); %#ok<AGROW>
     end
 end
