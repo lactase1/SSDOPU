@@ -35,7 +35,7 @@ params.processing.iy = 1;                      % Y方向步长(通常为1)
 params.processing.hasSeg = 1;                  % 是否已有分割结果(.mat文件)
 params.processing.enable_flatten_enface = 1;   % 1: 启用展平并保存展平体 & 生成 En-face, 0: 禁用
 params.processing.enable_enface_noflat = 0;    % 1: 生成非展平En-face切片（直接从原始数据切片）, 0: 禁用
-params.processing.max_frames = 36;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
+params.processing.max_frames = 0;              % 最大处理帧数 (0:处理所有帧, >0:限制帧数)
 params.range.setZrg = 0;
 params.parallel.batchSize = 500;
 
@@ -50,7 +50,7 @@ params.parallel.autoClosePool = false;
 
 %% ========== 处理模式配置 ==========
 % 处理模式配置（当前仅保留滤波模式选项）
-params.mode.wovWinF = 0;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
+params.mode.wovWinF = 1;                       % 滤波模式 (1:固定高斯滤波, 0:自适应DOPU滤波)
 
 %% ========== 分光谱DOPU设置 ==========
 params.dopu.do_ssdopu = 1;                     % 是否启用分光谱DOPU (1:启用, 0:禁用)
@@ -74,7 +74,7 @@ params.dopu.do_combined = 1;                   % 是否启用组合DOPU (分裂�
 % - 滤波核范围影响DOPU计算的稳定性和精度
 
 % 平均层数设置(MAX_AVNUM = 19)
-params.polarization.Avnum = 19;                 % DDG测试用平均层数(统一使用以保持一致性)
+params.polarization.Avnum = 3;                 % DDG测试用平均层数(统一使用以保持一致性)
 params.polarization.enableDopuPhaseSupp = 0;  % 1: 使用DOPU自适应相位抑制; 0: 关闭该功能
 
 % 配置1滤波核范围 (用于局部双折射LA计算)
@@ -98,7 +98,7 @@ params.filters.h1_sigma = 1.5;                % 高斯核1标准差 (降低以�
 params.filters.h1 = fspecial('gaussian', params.filters.h1_size, params.filters.h1_sigma);
 
 % 中尺度高斯核 (用于结构增强和背景平滑) - 背景优先
-params.filters.h2_size = [19 19];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
+params.filters.h2_size = [13 13];               % 高斯核2尺寸 (显著增大以平滑大尺度背景)
 params.filters.h2_sigma = 3;                  % 高斯核2标准差 (增大以抑制深层噪声)
 params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.h2_sigma);
 
@@ -106,7 +106,7 @@ params.filters.h2 = fspecial('gaussian', params.filters.h2_size, params.filters.
 % 策略说明：
 %   - DOPU >= 阈值（高质量组织）：使用固定h2滤波，保留细节
 %   - DOPU < 阈值（低质量/深层）：使用自适应滤波，从h2核大小开始根据DOPU向上调整核大小
-params.filters.enable_output_adaptive = 1;     % 1: 启用输出端混合滤波; 0: 使用传统固定h2滤波
+params.filters.enable_output_adaptive = 0;     % 1: 启用输出端混合滤波; 0: 使用传统固定h2滤波
 params.filters.output_dopu_threshold = 0.35;    % DOPU阈值，区分高低质量区域（典型值0.3-0.5）
 params.filters.kRL_output = 13;                % 自适应滤波核下限（通常设为h2核大小，作为低DOPU区域的起始核）
 params.filters.kRU_output = 31;                % 自适应滤波核上限（DOPU=0时的最大核，用于低DOPU区域）
@@ -114,7 +114,7 @@ params.filters.adaptive_filter_bottom_depth = 80;  % DOPU自适应滤波仅对�
 
 % 【底层相位延迟减小参数】用于深层区域的相位延迟降噪
 % 在底层区域，对低DOPU像素降低相位延迟值以抑制噪声，提高深层成像质量
-params.filters.enable_bottom_layer_phase_reduction = 1;  % 1: 启用底层相位延迟减小; 0: 禁用
+params.filters.enable_bottom_layer_phase_reduction = 0;  % 1: 启用底层相位延迟减小; 0: 禁用
 params.filters.bottom_layer_depth = 120;        % 底层深度范围（从底部开始向上的层数）
 params.filters.bottom_phase_reduction_ratio = 2;  % 相位延迟减小比例（0.5表示减小50%）
 params.filters.bottom_dopu_threshold = 0.35;    % 底层DOPU阈值（小于此值的像素会被减小相位延迟）
@@ -128,10 +128,33 @@ params.surface.median_window = 7;              % 中值滤波窗口大小(减小
 params.surface.smooth_window = 9;              % 平滑滤波窗口大小(减小以保持局部特征)
 
 %% ========== 后巩膜边界处理参数 ==========
-% 后巩膜边界文件路径（MAT文件）
-% params.files.sclera_boundary_path = 'C:\yongxin.wang\Data\Process_Data\Disk\sclera_boundary.mat';  % 留空则不处理；设置完整路径则启用
-% MAT文件中的变量名（可选，留空则自动探测）
-params.files.sclera_boundary_var = '';   % 例如: 'boundary', 'layer', 'sclera_line' 等
+% 【功能说明】后巩膜边界用于限制处理深度范围，提高深层组织分析质量
+%
+% 加载逻辑（优先级从高到低）：
+%   1. 自动从输入文件夹下的 scaler_mat 子文件夹中查找匹配的 MAT 文件
+%      - 精确匹配：MAT文件名与OCT文件名相同
+%      - 模糊匹配：文件名包含关系
+%      - 索引匹配：按文件顺序对应
+%   2. 回退到下方 sclera_boundary_path 指定的路径
+%
+% 是否启用后巩膜边界处理 (1:启用, 0:禁用)
+params.files.use_sclera_boundary = 1;
+
+% scaler_mat 子文件夹名称（相对于输入数据文件夹）
+params.files.sclera_mat_folder = 'scaler_mat';
+
+% 后巩膜边界文件路径（MAT文件）- 作为回退选项
+% 留空则仅使用 scaler_mat 自动查找；设置完整路径则作为找不到时的回退
+params.files.sclera_boundary_path = '';
+% 示例: params.files.sclera_boundary_path = 'C:\yongxin.wang\Data\Process_Data\Disk\sclera_boundary.mat';
+
+% MAT文件中的变量名（可选，留空则自动探测常见变量名）
+% 自动探测顺序: bottomLines, scleraLines, boundary, layer, sclera_line, topLines
+params.files.sclera_boundary_var = '';
+
+% 后巩膜边界修复参数
+params.files.sclera_fix_threshold = 5;         % 异常值阈值（<=此值视为无效，将被修复）
+params.files.sclera_fix_value_mode = 'nZ';     % 修复值模式: 'nZ'=设为nZ+1跳过, 'max'=设为最大有效值
 
 %% ========== 日志与调试设置 ==========
 % 全局日志等级: 0 = 静默 (默认), 1 = 简短, 2 = 详细
