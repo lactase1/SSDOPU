@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang\glaucoma';
+data_path   = 'C:\yongxin.wang\Data\Process_Data\Rep';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'C:\yongxin.wang\glaucoma\Output\ddg_3layer_3_13';
+output_base = 'D:\1-Liu Jian\yongxin.wang\Output\Rep\ddg_3layer_3_3';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -1099,11 +1099,27 @@ function rPSOCT_process_single_file(varargin)
         % dicomwrite(uint8(255 * (Smap_rep1 / 2 + 0.5)), fullfile(dcm_dir, [name, '_1-3_1rep-Stokes.dcm']));
         dicomwrite_with_lowquality(uint8(255 * (Smap_avg(1:nZ_save, :, :, :) / 2 + 0.5)), fullfile(dcm_dir, [name, '_1-3_4rep-Stokes.dcm']), dcm_low_quality_dir, low_quality_scale);
 
-        % 对1-4 DOPU图像应用阈值过滤（只保留前300层）
+        % 对1-4 DOPU图像应用阈值过滤（只保留前nZ_save层）
         dopu_thresholded = dopu_splitSpectrum(1:nZ_save, :, :);
-        dopu_thresholded(dopu_thresholded <= 0.38) = 0;  % 小于等于0.5的设为0
+        dopu_thresholded(dopu_thresholded <= 0.4) = 0;  % 小于等于0.4的设为0
+        
+        % 对DOPU图像应用表面边界mask（边界以上区域设为0）
+        dopu_with_boundary = dopu_thresholded;
+        for iY = 1:nY
+            for iX = 1:size(dopu_with_boundary, 2)
+                surface_pos = round(topLines(iX, iY));
+                
+                if surface_pos > nZ_save
+                    % Case 1: 无效边界 (nZ+1) -> 全黑
+                    dopu_with_boundary(1:nZ_save, iX, iY) = 0;
+                elseif surface_pos > 1
+                    % Case 2: 正常边界 -> 边界以上涂黑
+                    dopu_with_boundary(1:surface_pos-1, iX, iY) = 0;
+                end
+            end
+        end
 
-        dicomwrite_with_lowquality(uint8(255 * (permute(dopu_thresholded, [1 2 4 3]))), fullfile(dcm_dir, [name, '_1-4_dopu_SS.dcm']), dcm_low_quality_dir, low_quality_scale);
+        dicomwrite_with_lowquality(uint8(255 * (permute(dopu_with_boundary, [1 2 4 3]))), fullfile(dcm_dir, [name, '_1-4_dopu_SS.dcm']), dcm_low_quality_dir, low_quality_scale);
         
         if ~params.processing.hasSeg
             save(fullfile(filepath, [name, '.mat']), 'topLines', 'czrg');
