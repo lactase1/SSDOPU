@@ -3,9 +3,9 @@
 % 直接在脚本中指定路径和目标帧，运行时无需传参
 
 % --- 配置（按需修改） ---
-dcm_folder = 'C:\yongxin.wang\glaucoma\Output\dopu_19layer_3_19\2024.07.31_17.26.42_1.m\dcm';
-target_frame = 19; % 1-based
-output_dir = 'C:\yongxin.wang\glaucoma\Output\dopu_19layer_3_19\2024.07.31_17.26.42_1.m\slect_frame';
+dcm_folder = 'D:\1-Liu Jian\yongxin.wang\Output\Enface\ddg_3layer_3_3\2024.09.04_18.42.53_1.SLnoBG_disk\dcm';
+target_frame = 26; % 1-based
+output_dir = 'D:\1-Liu Jian\yongxin.wang\Output\Enface\ddg_3layer_3_3\2024.09.04_18.42.53_1.SLnoBG_disk\slect_frame';
 % -------------------------
 
 if ~exist(dcm_folder, 'dir')

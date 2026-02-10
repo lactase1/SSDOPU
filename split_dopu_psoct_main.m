@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang\Data\Process_Data\Rep';
+data_path   = 'C:\yongxin.wang\glaucoma';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'D:\1-Liu Jian\yongxin.wang\Output\Rep\ddg_3layer_3_3';
+output_base = 'D:\1-Liu Jian\yongxin.wang\Output\G\ddg_3layer_3_3';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -506,6 +506,30 @@ function rPSOCT_process_single_file(varargin)
                 try
                     load(matFilePath, 'topLines');
                     topLines = double(topLines);
+                    
+                    % ========== 自动修复 topLines 维度 ==========
+                    [loaded_dim1, loaded_dim2] = size(topLines);
+                    
+                    % 检测是否需要转置
+                    if loaded_dim1 ~= nX && loaded_dim2 == nX
+                        topLines = topLines';
+                        [loaded_dim1, loaded_dim2] = size(topLines);
+                    end
+                    
+                    % 按实际帧数切片（处理 max_frames 限制）
+                    if loaded_dim1 == nX && loaded_dim2 > nY
+                        topLines = topLines(:, 1:nY);
+                    elseif loaded_dim1 == nX && loaded_dim2 < nY
+                        topLines_padded = ones(nX, nY);
+                        topLines_padded(:, 1:loaded_dim2) = topLines;
+                        topLines = topLines_padded;
+                    elseif loaded_dim1 ~= nX
+                        warning('topLines 维度不匹配，将重置为默认值');
+                        topLines = ones(nX, nY);
+                        params.processing.hasSeg = 0;
+                    end
+                    % ==========================================================
+                    
                     % 注意: 无效边界值(0/负数/NaN)将在后续统一修复为 nZ (底部)
                     fprintf('成功加载分割结果文件: %s\n', matFilePath);
                 catch ME
@@ -523,41 +547,12 @@ function rPSOCT_process_single_file(varargin)
         nZcrop = numel(czrg);
         nZ = nZcrop;
         
-        % ========== [Fix 2.0] 强力修复 Topline 边界逻辑 ==========
-        % Bug 分析: 
-        %   - 边界检测失败时，test_seg_top/topLines 可能为 0, 1, 或极小值(1~5)
-        %   - 原修复条件 (< 1) 无法捕捉 topLines=1~5 的边缘伪影
-        %   - 导致背景区域仍被误算为"全深度组织"
-        % 
-        % 加强策略:
-        %   1. 放宽判定阈值: <= 5 (捕捉边缘噪声和极端值)
-        %   2. 彻底屏蔽: 设为 nZ+1 (触发 validLen<=0，跳过计算)
-        %   3. 原理: validLen = nZ - top + 1
-        %            若 top = nZ+1，则 validLen = 0，彻底不处理该区域
-        % 
-        % 更新日期: 2026-01-09 (Fix 2.0)
+        % ========== 修复无效 Topline 边界值 ==========
         if exist('topLines', 'var')
-            % 判定阈值设为 5，捕捉 0, 1, 以及极端的边缘噪声
-            invalid_mask = (topLines <= 5) | isnan(topLines);
-            
+            invalid_mask = (topLines <= 0) | isnan(topLines);
             if any(invalid_mask(:))
-                num_invalid = sum(invalid_mask(:));
-                fprintf('\n========== [Fix 2.0] Topline 边界强力修复 ==========\n');
-                fprintf('检测到 %d 个异常 Topline (值<=5 或 NaN)\n', num_invalid);
-                fprintf('修复策略: 设为 nZ+1=%d，强制跳过计算 (validLen=0)\n', nZ+1);
-                fprintf('修复前范围: %.1f ~ %.1f\n', min(topLines(:)), max(topLines(:)));
-                fprintf('修复前统计: [<=1]: %d, [2~5]: %d, [NaN]: %d\n', ...
-                    sum(topLines(:)<=1), sum(topLines(:)>1 & topLines(:)<=5), sum(isnan(topLines(:))));
-                
-                % 设为 nZ+1 确保 validLen <= 0，彻底跳过处理
-                topLines(invalid_mask) = nZ + 1;
-                
-                fprintf('修复后范围: %.1f ~ %.1f\n', min(topLines(:)), max(topLines(:)));
-                fprintf('修复比例: %.2f%% (%d/%d 像素)\n', ...
-                    100 * num_invalid / numel(topLines), num_invalid, numel(topLines));
-                fprintf('===================================================\n\n');
-            else
-                fprintf('[Fix 2.0] Topline 边界检查通过：无异常值 (<=5 或 NaN)。\n');
+                topLines(invalid_mask) = 1;
+                fprintf('已修复 %d 个无效 topLines 值 (<=0 或 NaN)\n', sum(invalid_mask(:)));
             end
         end
         % =========================================================
@@ -750,32 +745,12 @@ function rPSOCT_process_single_file(varargin)
             fprintf('未配置后巩膜边界数据路径，跳过加载\n');
         end
         
-        % ========== [Fix 2.0] 强力修复后巩膜边界逻辑（如果已加载）==========
-        % 与 topLines 修复逻辑一致：阈值 <= 5, 设为 nZ+1
+        % ========== 修复无效后巩膜边界值 ==========
         if has_sclera_boundary && ~isempty(sclera_boundary_data)
-            invalid_mask_sclera = (sclera_boundary_data <= 5) | isnan(sclera_boundary_data);
-            
+            invalid_mask_sclera = (sclera_boundary_data <= 0) | isnan(sclera_boundary_data);
             if any(invalid_mask_sclera(:))
-                num_invalid_sclera = sum(invalid_mask_sclera(:));
-                fprintf('\n========== [Fix 2.0] 后巩膜边界强力修复 ==========\n');
-                fprintf('检测到 %d 个异常边界点 (值<=5 或 NaN)\n', num_invalid_sclera);
-                fprintf('修复策略: 设为 nZ+1=%d，强制跳过计算\n', nZ+1);
-                fprintf('修复前范围: %.1f ~ %.1f\n', min(sclera_boundary_data(:)), max(sclera_boundary_data(:)));
-                fprintf('修复前统计: [<=1]: %d, [2~5]: %d, [NaN]: %d\n', ...
-                    sum(sclera_boundary_data(:)<=1), ...
-                    sum(sclera_boundary_data(:)>1 & sclera_boundary_data(:)<=5), ...
-                    sum(isnan(sclera_boundary_data(:))));
-                
-                % 设为 nZ+1 确保彻底跳过处理
-                sclera_boundary_data(invalid_mask_sclera) = nZ + 1;
-                
-                fprintf('修复后范围: %.1f ~ %.1f\n', min(sclera_boundary_data(:)), max(sclera_boundary_data(:)));
-                fprintf('修复比例: %.2f%% (%d/%d 像素)\n', ...
-                    100 * num_invalid_sclera / numel(sclera_boundary_data), ...
-                    num_invalid_sclera, numel(sclera_boundary_data));
-                fprintf('===================================================\n\n');
-            else
-                fprintf('[Fix 2.0] 后巩膜边界检查通过：无异常值 (<=5 或 NaN)。\n');
+                sclera_boundary_data(invalid_mask_sclera) = 1;
+                fprintf('已修复 %d 个无效后巩膜边界值\n', sum(invalid_mask_sclera(:)));
             end
         end
         % ====================================================================
@@ -1078,18 +1053,14 @@ function rPSOCT_process_single_file(varargin)
 
         % 创建带边界的结构图像副本（只保留前300层）
         Struc_with_boundary = Struc(1:nZ_save, :, :, :);
-        % 对Struc应用边界处理：
-        % LOGIC UPDATE [2026-01-09]: If surface_pos > nZ_save (meaning invalid boundary or nZ+1), 
-        % mask the ENTIRE column as black.
+        % 对Struc应用边界处理
         for iY = 1:size(Struc_with_boundary, 4)
             for iX = 1:size(Struc_with_boundary, 2)
                 surface_pos = round(topLines(iX, iY));
                 
                 if surface_pos > nZ_save
-                    % Case 1: 无效边界 (nZ+1) -> 全黑
                     Struc_with_boundary(1:nZ_save, iX, :, iY) = 0;
                 elseif surface_pos > 1
-                    % Case 2: 正常边界 -> 边界以上涂黑
                     Struc_with_boundary(1:surface_pos-1, iX, :, iY) = 0;
                 end
             end
@@ -1110,10 +1081,8 @@ function rPSOCT_process_single_file(varargin)
                 surface_pos = round(topLines(iX, iY));
                 
                 if surface_pos > nZ_save
-                    % Case 1: 无效边界 (nZ+1) -> 全黑
                     dopu_with_boundary(1:nZ_save, iX, iY) = 0;
                 elseif surface_pos > 1
-                    % Case 2: 正常边界 -> 边界以上涂黑
                     dopu_with_boundary(1:surface_pos-1, iX, iY) = 0;
                 end
             end
@@ -1151,7 +1120,6 @@ function rPSOCT_process_single_file(varargin)
         end
         
         % 应用边界mask：将边界以上的区域设为纯黑色（只处理前nZ_save层）
-        % LOGIC UPDATE [2026-01-09]: If surface_pos > nZ_save, mask ENTIRE column.
         for iY = 1:nY
             for iX = 1:size(cumLA_cfg_hsv, 2)
                 surface_pos = round(topLines(iX, iY));
@@ -1227,7 +1195,7 @@ function rPSOCT_process_single_file(varargin)
             for ix = 1:nX
                 surf_z = topLines_round(ix, iy);
                 
-                % [Fix 2.0] 如果 surf_z 是无效值 (比如 nZ+1)，则跳过展平（保留黑色 0）
+                % 如果表面位置超出范围，跳过展平
                 if surf_z > nZ_orig
                     continue; 
                 end
