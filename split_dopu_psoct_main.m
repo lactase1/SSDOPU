@@ -19,9 +19,9 @@ if exist(function_path, 'dir')
 end
 
 % 设置数据路径
-data_path   = 'C:\yongxin.wang\glaucoma';
+data_path   = 'C:\yongxin.wang\Data\Process_Data\05_1310_redDisk';
 % σ * 6 + 1 // σ * 4 + 1
-output_base = 'D:\1-Liu Jian\yongxin.wang\Output\G\ddg_3layer_3_3';
+output_base = 'D:\1-Liu Jian\yongxin.wang\Output\05_1310_redDisk\ddg_3layer_3_3';
 if ~exist(data_path, 'dir')
     error(['数据路径不存在: ' data_path]);
 end
@@ -1271,7 +1271,63 @@ function rPSOCT_process_single_file(varargin)
                 end
             end
         end
-        fprintf('\n  PhR 展平完成，耗时: %.2f 秒\n', toc(t_flatten));
+        fprintf('\n  PhR 彩色图展平完成，耗时: %.2f 秒\n', toc(t_flatten));
+        
+        % (4) 展平 PhR_c_cfg1_avg - 原始物理数值（用于量化分析）
+        fprintf('展平 PhR 物理数据（原始浮点数）...\n');
+        t_phys = tic;
+        [nZ_PhR_phys, ~, ~] = size(PhR_c_cfg1_avg);
+        nZ_PhR_phys_flatten = min(nZ_PhR_phys, nZ_flatten);
+        PhR_phys_flat = zeros(nZ_PhR_phys_flatten, nX, nY, 'single');
+        
+        for iy = 1:nY
+            if mod(iy, max(1, floor(nY/5))) == 0 || iy == nY
+                print_progress(iy, nY, 'PhR_phys', 20);
+            end
+            for ix = 1:nX
+                surf_z = topLines_round(ix, iy);
+                surf_z = max(1, min(nZ_orig, surf_z));
+                
+                target_surf_z = 1;
+                shift = target_surf_z - surf_z;
+                
+                for z = 1:nZ_PhR_phys_flatten
+                    z_src = z - shift;
+                    if z_src >= 1 && z_src <= nZ_PhR_phys
+                        PhR_phys_flat(z, ix, iy) = PhR_c_cfg1_avg(z_src, ix, iy);
+                    end
+                end
+            end
+        end
+        fprintf('\n  PhR 物理数据展平完成，耗时: %.2f 秒\n', toc(t_phys));
+        
+        % (5) 展平 cumLA_cfg1_avg - 原始 Stokes 矢量（用于量化分析）
+        fprintf('展平 OA 物理数据（原始 Stokes 矢量）...\n');
+        t_oa = tic;
+        [nZ_OA_phys, ~, ~, ~] = size(cumLA_cfg1_avg);
+        nZ_OA_phys_flatten = min(nZ_OA_phys, nZ_flatten);
+        OA_phys_flat = zeros(nZ_OA_phys_flatten, nX, 3, nY, 'single');
+        
+        for iy = 1:nY
+            if mod(iy, max(1, floor(nY/5))) == 0 || iy == nY
+                print_progress(iy, nY, 'OA_phys', 20);
+            end
+            for ix = 1:nX
+                surf_z = topLines_round(ix, iy);
+                surf_z = max(1, min(nZ_orig, surf_z));
+                
+                target_surf_z = 1;
+                shift = target_surf_z - surf_z;
+                
+                for z = 1:nZ_OA_phys_flatten
+                    z_src = z - shift;
+                    if z_src >= 1 && z_src <= nZ_OA_phys
+                        OA_phys_flat(z, ix, :, iy) = cumLA_cfg1_avg(z_src, ix, :, iy);
+                    end
+                end
+            end
+        end
+        fprintf('\n  OA 物理数据展平完成，耗时: %.2f 秒\n', toc(t_oa));
         
         %% ========== 步骤2a: 基于后巩膜边界展平数据（如果有） ==========
         if has_sclera_boundary
@@ -1603,6 +1659,151 @@ function rPSOCT_process_single_file(varargin)
     else
         fprintf('\n跳过展平及 En-face 生成功能 (enable_flatten_enface = 0)\n');
     end % end of enable_flatten_enface check
+
+    %% ========== 导出量化统计所需的高精度原始数据 (.mat) ==========
+    fprintf('\n========== 开始导出统计分析原始数据（分类存储）==========\n');
+    try
+        saved_files = {};  % 记录已保存的文件用于日志输出
+        
+        % ========== 1. 保存 OA 统计数据 ==========
+        if exist('OA_phys_flat', 'var') && ~isempty(OA_phys_flat)
+            fprintf('\n[1/3] 保存 OA (光轴) 统计数据...\n');
+            oa_stats_filename = fullfile(foutputdir, [name '_OA_stats.mat']);
+            
+            % 计算 OA En-face 均值投影 (深度 50-100 层)
+            [nZ_oa, ~, ~, ~] = size(OA_phys_flat);
+            depth_range = max(1, min(50, nZ_oa)):min(nZ_oa, 100);
+            OA_enface_avg = squeeze(mean(OA_phys_flat(depth_range, :, :, :), 1));
+            fprintf('  -> OA_phys_flat: [%d, %d, 3, %d] (单精度浮点, Stokes 矢量)\n', size(OA_phys_flat,1), size(OA_phys_flat,2), size(OA_phys_flat,4));
+            fprintf('  -> OA_enface_avg: [%d, 3, %d] (深度 %d-%d 层均值投影)\n', size(OA_enface_avg,1), size(OA_enface_avg,3), depth_range(1), depth_range(end));
+            
+            save(oa_stats_filename, 'OA_phys_flat', 'OA_enface_avg', '-v7.3');
+            
+            % 显示文件大小
+            file_info = dir(oa_stats_filename);
+            file_size_mb = file_info.bytes / (1024^2);
+            fprintf('  保存成功: %s\n', oa_stats_filename);
+            if file_size_mb > 1024
+                fprintf('  文件大小: %.2f GB\n', file_size_mb / 1024);
+            else
+                fprintf('  文件大小: %.2f MB\n', file_size_mb);
+            end
+            saved_files{end+1} = struct('name', '_OA_stats.mat', 'path', oa_stats_filename, 'size_mb', file_size_mb, 'description', 'OA物理数据 (Stokes矢量 + En-face均值)');
+            
+            % 内存保护：立即释放 OA 数据
+            clear OA_phys_flat OA_enface_avg;
+            fprintf('  已释放内存: OA_phys_flat, OA_enface_avg\n');
+        else
+            fprintf('\n[1/3] 跳过 OA 统计数据 (变量不存在或为空)\n');
+        end
+        
+        % ========== 2. 保存 PhR 统计数据 ==========
+        if exist('PhR_phys_flat', 'var') && ~isempty(PhR_phys_flat)
+            fprintf('\n[2/3] 保存 PhR (相位延迟) 统计数据...\n');
+            phr_stats_filename = fullfile(foutputdir, [name '_PhR_stats.mat']);
+            
+            % 计算 PhR En-face 均值投影 (深度 50-100 层)
+            [nZ_phr, ~, ~] = size(PhR_phys_flat);
+            depth_range = max(1, min(50, nZ_phr)):min(nZ_phr, 100);
+            PhR_enface_avg = squeeze(mean(PhR_phys_flat(depth_range, :, :), 1));
+            fprintf('  -> PhR_phys_flat: [%d, %d, %d] (单精度浮点, 原始相位值)\n', size(PhR_phys_flat,1), size(PhR_phys_flat,2), size(PhR_phys_flat,3));
+            fprintf('  -> PhR_enface_avg: [%d, %d] (深度 %d-%d 层均值投影)\n', size(PhR_enface_avg,1), size(PhR_enface_avg,2), depth_range(1), depth_range(end));
+            
+            save(phr_stats_filename, 'PhR_phys_flat', 'PhR_enface_avg', '-v7.3');
+            
+            % 显示文件大小
+            file_info = dir(phr_stats_filename);
+            file_size_mb = file_info.bytes / (1024^2);
+            fprintf('  保存成功: %s\n', phr_stats_filename);
+            if file_size_mb > 1024
+                fprintf('  文件大小: %.2f GB\n', file_size_mb / 1024);
+            else
+                fprintf('  文件大小: %.2f MB\n', file_size_mb);
+            end
+            saved_files{end+1} = struct('name', '_PhR_stats.mat', 'path', phr_stats_filename, 'size_mb', file_size_mb, 'description', 'PhR物理数据 (原始相位值 + En-face均值)');
+            
+            % 内存保护：立即释放 PhR 数据
+            clear PhR_phys_flat PhR_enface_avg;
+            fprintf('  已释放内存: PhR_phys_flat, PhR_enface_avg\n');
+        else
+            fprintf('\n[2/3] 跳过 PhR 统计数据 (变量不存在或为空)\n');
+        end
+        
+        % ========== 3. 保存 Metadata 统计数据 ==========
+        fprintf('\n[3/3] 保存 Metadata (元数据) 统计数据...\n');
+        metadata_stats_filename = fullfile(foutputdir, [name '_Metadata_stats.mat']);
+        
+        % 检查关键变量
+        metadata_vars = {};
+        
+        if exist('Struc_flat', 'var') && ~isempty(Struc_flat)
+            metadata_vars{end+1} = 'Struc_flat';
+            fprintf('  -> Struc_flat: [%d, %d, %d] (单精度浮点, 3D 结构图)\n', size(Struc_flat,1), size(Struc_flat,2), size(Struc_flat,3));
+        else
+            fprintf('  -> 警告: Struc_flat 不存在，跳过\n');
+        end
+        
+        if exist('dopu_splitSpectrum', 'var') && ~isempty(dopu_splitSpectrum)
+            metadata_vars{end+1} = 'dopu_splitSpectrum';
+            fprintf('  -> dopu_splitSpectrum: [%d, %d, %d] (3D SS-DOPU)\n', size(dopu_splitSpectrum,1), size(dopu_splitSpectrum,2), size(dopu_splitSpectrum,3));
+        else
+            fprintf('  -> 警告: dopu_splitSpectrum 不存在，跳过\n');
+        end
+        
+        if exist('topLines', 'var') && ~isempty(topLines)
+            metadata_vars{end+1} = 'topLines';
+            fprintf('  -> topLines: [%d, %d] (表面边界数据)\n', size(topLines,1), size(topLines,2));
+        else
+            fprintf('  -> 警告: topLines 不存在，跳过\n');
+        end
+        
+        if ~isempty(metadata_vars)
+            save(metadata_stats_filename, metadata_vars{:}, '-v7.3');
+            
+            % 显示文件大小
+            file_info = dir(metadata_stats_filename);
+            file_size_mb = file_info.bytes / (1024^2);
+            fprintf('  保存成功: %s\n', metadata_stats_filename);
+            if file_size_mb > 1024
+                fprintf('  文件大小: %.2f GB\n', file_size_mb / 1024);
+            else
+                fprintf('  文件大小: %.2f MB\n', file_size_mb);
+            end
+            saved_files{end+1} = struct('name', '_Metadata_stats.mat', 'path', metadata_stats_filename, 'size_mb', file_size_mb, 'description', 'Metadata (Struc + DOPU + topLines)');
+            
+            % 内存保护：立即释放元数据
+            clear Struc_flat dopu_splitSpectrum topLines;
+            fprintf('  已释放内存: Struc_flat, dopu_splitSpectrum, topLines\n');
+        else
+            fprintf('  警告: 没有可用的元数据变量，跳过保存。\n');
+        end
+        
+        % ========== 汇总日志 ==========
+        fprintf('\n========== 统计数据导出完成 ==========\n');
+        if ~isempty(saved_files)
+            fprintf('成功生成 %d 个统计文件:\n', length(saved_files));
+            total_size_mb = 0;
+            for i = 1:length(saved_files)
+                file_struct = saved_files{i};
+                fprintf('  [%d] %s\n', i, file_struct.name);
+                fprintf('      路径: %s\n', file_struct.path);
+                fprintf('      大小: %.2f MB\n', file_struct.size_mb);
+                fprintf('      描述: %s\n', file_struct.description);
+                total_size_mb = total_size_mb + file_struct.size_mb;
+            end
+            fprintf('总大小: %.2f MB (%.2f GB)\n', total_size_mb, total_size_mb / 1024);
+        else
+            fprintf('未生成任何统计文件。\n');
+        end
+        fprintf('========================================\n\n');
+    catch ME
+        fprintf('导出统计数据时出错: %s\n', ME.message);
+        fprintf('错误堆栈:\n');
+        for k = 1:length(ME.stack)
+            fprintf('  文件: %s, 行: %d, 函数: %s\n', ME.stack(k).file, ME.stack(k).line, ME.stack(k).name);
+        end
+        fprintf('继续执行后续流程...\n\n');
+    end
 
     %% ========== 生成非展平En-face切片（直接从原始数据切片） ==========
     if isfield(params.processing,'enable_enface_noflat') && params.processing.enable_enface_noflat
